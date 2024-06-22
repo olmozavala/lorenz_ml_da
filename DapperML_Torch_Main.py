@@ -16,19 +16,19 @@ import numpy as np
 from os.path import join
 
 # %% Parameters
-input_size = 3 
-output_size = 3 
-prev_time_steps = 10
-hidden_layers = [64, 64, 64, 32, 16]
+input_size = 3  # Number of input features (always 3 for this Lorenz)
+output_size = 3  # Number of output features (always 3 for this Lorenz)
+prev_time_steps = 5 # Number of previous time steps to consider as input
+hidden_layers = [64, 32, 16]
 hidden_activation = nn.ReLU
 output_activation = None
 batch_size = 512
-num_epochs = 500
+num_epochs = 500 # Max number of epochs
 learning_rate = 0.001
-patience = 30
+patience = 30  # Early stopping patience
 # Parameters for the Lorenz63 Dataset
 std = 1 # Standard deviation of the noise
-save_Dt = 10
+save_Dt = 1 # Save every save_Dt time steps from the Lorenz63 system
 Ns = 10000 # Number of samples
 
 # %% Create Dataset and DataLoader
@@ -58,7 +58,8 @@ early_stopping = EarlyStopping(patience=patience, min_delta=0.01)
 # Create a model name using the current date and time and the parameters
 cur_time = datetime.now().strftime('%Y%m%d_%H%M%S')
 model_name = f'LorenzDenseNN_prevTimeSteps_{prev_time_steps}_std_{std}_' +\
-                f'saveDt_{save_Dt}_Ns_{Ns}_{cur_time}'
+                f'saveDt_{save_Dt}_Ns_{Ns}_' +\
+                    f'hidden_layers_{"_".join(map(str,hidden_layers))}_{cur_time}'
 
 print(f'Model Name: {model_name}')
 model = train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping)
@@ -83,7 +84,7 @@ predictions = np.array(predictions).squeeze()
 all_loss /= len(train_data)
 print(f'All Loss: {all_loss:.5f}')
 plot_x_3d(predictions, color='g', save_path=f'{model_name}_full_dataset.png',
-          title=f'Predictions for the full dataset, loss: {all_loss:.5f} \n Model: {model_name}')
+          title=f'Predictions, full dataset from restart, loss: {all_loss:.5f} \n Model: {model_name}')
 
 # %% Using only initial conditions to predict future states and plot error
 start_time = 300
@@ -100,30 +101,8 @@ for i in range(time_steps):
     input_tensor = torch.cat((keep,torch.tensor(input, dtype=torch.float32)))
 
 plt.plot(error)
-plt.title(f'Error between predicted and true values start time: {start_time}')
+plt.title(f'Error between predicted and true values start time: {start_time} \n {model_name}')
 plt.xlabel(f'Time Steps with dt={save_Dt}')
 plt.ylabel('Error')
 plt.savefig(join('imgs',f'{model_name}_error.png'))
 # plt.show()
-
-# %% Plot the test data
-# model_file = f'{model_name}_best_model.pth'
-# model.eval()
-# test_loss = 0.0
-# predictions = []
-# train_data, target_data = dataset.get_all_data()
-# with torch.no_grad():
-#     # for inputs, targets in test_loader:
-#     for inputs, targets in train_loader:
-#         outputs = model(inputs)
-#         loss = criterion(outputs, targets)
-#         test_loss += loss.item() * inputs.size(0)
-#         # for x in outputs:
-#         for x in inputs:
-#             predictions.append(x.numpy())
-# predictions = np.array(dataset.inverse_transform(predictions))
-# # %%
-# test_loss /= len(test_loader.dataset)
-# print(f'Test Loss: {test_loss:.4f}')
-# plot_x_3d(predictions, color='g')
-# # %%
