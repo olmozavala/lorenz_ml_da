@@ -18,8 +18,8 @@ from os.path import join
 # %% Parameters
 input_size = 3  # Number of input features (always 3 for this Lorenz)
 output_size = 3  # Number of output features (always 3 for this Lorenz)
-prev_time_steps = 5 # Number of previous time steps to consider as input
-hidden_layers = [64, 32, 16]
+prev_time_steps = 3 # Number of previous time steps to consider as input
+hidden_layers = [64, 64, 32, 16]
 hidden_activation = nn.ReLU
 output_activation = None
 batch_size = 512
@@ -28,7 +28,7 @@ learning_rate = 0.001
 patience = 30  # Early stopping patience
 # Parameters for the Lorenz63 Dataset
 std = 1 # Standard deviation of the noise
-save_Dt = 1 # Save every save_Dt time steps from the Lorenz63 system
+save_Dt = 10 # Save every save_Dt time steps from the Lorenz63 system
 Ns = 10000 # Number of samples
 
 # %% Create Dataset and DataLoader
@@ -57,7 +57,7 @@ early_stopping = EarlyStopping(patience=patience, min_delta=0.01)
 # %% Train Model
 # Create a model name using the current date and time and the parameters
 cur_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-model_name = f'LorenzDenseNN_prevTimeSteps_{prev_time_steps}_std_{std}_' +\
+model_name = f'prevTimeS_{prev_time_steps}_std_{std}_' +\
                 f'saveDt_{save_Dt}_Ns_{Ns}_' +\
                     f'hidden_layers_{"_".join(map(str,hidden_layers))}_{cur_time}'
 
@@ -93,12 +93,14 @@ input = train_data[start_time]
 input_tensor = torch.tensor(train_data[start_time:start_time+prev_time_steps].flatten(), dtype=torch.float32)
 time_steps = 100
 error = []
+predictions = []
 for i in range(time_steps):
     output = model(input_tensor.unsqueeze(0))
-    input = output.squeeze().detach().numpy()
-    error.append(target_data[i+start_time] - input)
+    output = output.squeeze().detach().numpy()
+    predictions.append(output)
+    error.append(target_data[i+start_time] - output)
     keep = input_tensor[input_size:].clone()
-    input_tensor = torch.cat((keep,torch.tensor(input, dtype=torch.float32)))
+    input_tensor = torch.cat((keep,torch.tensor(output, dtype=torch.float32)))
 
 plt.plot(error)
 plt.title(f'Error between predicted and true values start time: {start_time} \n {model_name}')
@@ -106,3 +108,5 @@ plt.xlabel(f'Time Steps with dt={save_Dt}')
 plt.ylabel('Error')
 plt.savefig(join('imgs',f'{model_name}_error.png'))
 # plt.show()
+plot_x_3d(np.array(predictions), color='g', save_path=f'{model_name}_full_dataset_IC.png',
+          title=f'Predictions, full dataset from initial condition, loss: {all_loss:.5f} \n Model: {model_name}')
