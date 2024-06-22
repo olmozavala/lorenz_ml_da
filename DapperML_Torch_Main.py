@@ -18,7 +18,7 @@ from os.path import join
 # %% Parameters
 input_size = 3  # Number of input features (always 3 for this Lorenz)
 output_size = 3  # Number of output features (always 3 for this Lorenz)
-prev_time_steps = 3 # Number of previous time steps to consider as input
+prev_time_steps = 2 # Number of previous time steps to consider as input
 hidden_layers = [64, 64, 32, 16]
 hidden_activation = nn.ReLU
 output_activation = None
@@ -27,8 +27,8 @@ num_epochs = 500 # Max number of epochs
 learning_rate = 0.001
 patience = 30  # Early stopping patience
 # Parameters for the Lorenz63 Dataset
-std = 1 # Standard deviation of the noise
-save_Dt = 10 # Save every save_Dt time steps from the Lorenz63 system
+std = 0 # Standard deviation of the noise
+save_Dt = 1 # Save every save_Dt time steps from the Lorenz63 system
 Ns = 10000 # Number of samples
 
 # %% Create Dataset and DataLoader
@@ -77,8 +77,6 @@ with torch.no_grad():
         loss = criterion(output, target_tensor.reshape(1, -1))
         all_loss += loss.item()
         predictions.append(output.numpy())
-# %% Denormalize 
-# predictions = np.array(dataset.inverse_transform(np.array(predictions)))
 predictions = np.array(predictions).squeeze()
 # %%
 all_loss /= len(train_data)
@@ -87,18 +85,23 @@ plot_x_3d(predictions, color='g', save_path=f'{model_name}_full_dataset.png',
           title=f'Predictions, full dataset from restart, loss: {all_loss:.5f} \n Model: {model_name}')
 
 # %% Using only initial conditions to predict future states and plot error
-start_time = 300
+start_time = 1
 # start_time = len(train_dataset) 
 input = train_data[start_time]
 input_tensor = torch.tensor(train_data[start_time:start_time+prev_time_steps].flatten(), dtype=torch.float32)
-time_steps = 100
+time_steps = 1000
 error = []
 predictions = []
 for i in range(time_steps):
     output = model(input_tensor.unsqueeze(0))
+
+    target_tensor = torch.tensor(target_data[i+start_time], dtype=torch.float32)
+    loss = criterion(output, target_tensor.reshape(1, -1))
+
     output = output.squeeze().detach().numpy()
     predictions.append(output)
     error.append(target_data[i+start_time] - output)
+    all_loss += loss.item()
     keep = input_tensor[input_size:].clone()
     input_tensor = torch.cat((keep,torch.tensor(output, dtype=torch.float32)))
 
@@ -108,5 +111,13 @@ plt.xlabel(f'Time Steps with dt={save_Dt}')
 plt.ylabel('Error')
 plt.savefig(join('imgs',f'{model_name}_error.png'))
 # plt.show()
-plot_x_3d(np.array(predictions), color='g', save_path=f'{model_name}_full_dataset_IC.png',
-          title=f'Predictions, full dataset from initial condition, loss: {all_loss:.5f} \n Model: {model_name}')
+
+all_loss /= len(train_data)
+title =f'Predictions, {time_steps} steps from initial condition, loss: {all_loss:.5f} \n Model: {model_name}'
+plot_x_3d(np.array(predictions), color='g', save_path=f'{model_name}_error_IC.png',
+          title=title, linewidth=0.5)
+
+plot_x_y_da(np.array(predictions), 
+            target_data[start_time:start_time+time_steps], title=title,
+            save_path=f'{model_name}_pred_IC_.png')
+# %%
