@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from os.path import join
 
-def plot_x_y_da(xx, yy, title='', save_path=''):
+def plot_x_y_da(xx, yy, title='', save_path='', show_figure=False):
     yy_oz = np.zeros((yy.shape[0], 3))
     for i in range(yy_oz.shape[0]):
         yy_oz[i,:] = [yy[i][0], yy[i][1], yy[i][2]]
@@ -17,9 +17,11 @@ def plot_x_y_da(xx, yy, title='', save_path=''):
     if save_path != '':
         plt.savefig(join('imgs',save_path))
     # plt.show()
+    if show_figure:
+        plt.show()
     plt.close()
     
-def plot_x_3d(xx, color='orange', linewidth=0.1, title='', save_path=''):
+def plot_x_3d(xx, color='orange', linewidth=0.1, title='', save_path='', show_figure=False):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     # Plot with Small line width
@@ -27,5 +29,6 @@ def plot_x_3d(xx, color='orange', linewidth=0.1, title='', save_path=''):
     ax.set_title(title)
     if save_path != '':
         plt.savefig(join('imgs',save_path))
-    # plt.show()
+    if show_figure:
+        plt.show()
     plt.close()

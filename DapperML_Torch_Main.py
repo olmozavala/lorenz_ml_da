@@ -1,4 +1,7 @@
 # %%
+# Code to reload modules when changes are made
+# %load_ext autoreload
+# %autoreload 2
 from plot_helpers import plot_x_y_da, plot_x_3d
 from datetime import datetime
 # Import torch related libraries
@@ -111,13 +114,14 @@ plt.xlabel(f'Time Steps with dt={save_Dt}')
 plt.ylabel('Error')
 plt.savefig(join('imgs',f'{model_name}_error.png'))
 # plt.show()
-
+# %%
+show_figure = True
 all_loss /= len(train_data)
 title =f'Predictions, {time_steps} steps from initial condition, loss: {all_loss:.5f} \n Model: {model_name}'
 plot_x_3d(np.array(predictions), color='g', save_path=f'{model_name}_error_IC.png',
-          title=title, linewidth=0.5)
+          title=title, linewidth=0.5, show_figure=show_figure)
 
 plot_x_y_da(np.array(predictions), 
             target_data[start_time:start_time+time_steps], title=title,
-            save_path=f'{model_name}_pred_IC_.png')
+            save_path=f'{model_name}_pred_IC_.png', show_figure=show_figure)
 # %%
