@@ -21,7 +21,7 @@ from os.path import join
 # %% Parameters
 input_size = 3  # Number of input features (always 3 for this Lorenz)
 output_size = 3  # Number of output features (always 3 for this Lorenz)
-prev_time_steps = 2 # Number of previous time steps to consider as input
+prev_time_steps = 8 # Number of previous time steps to consider as input
 hidden_layers = [64, 64, 32, 16]
 hidden_activation = nn.ReLU
 output_activation = None

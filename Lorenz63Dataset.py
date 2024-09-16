@@ -24,7 +24,7 @@ class Lorenz63Dataset(Dataset):
         x_truth = np.empty((Nt_truth,Nx))
         x_truth[0] = initial_conditions
         x = initial_conditions.copy()  # Initialize x with initial conditions
-        # %%
+
         with tqdm(total=Nt_truth - 1, desc='L63 trajectory') as progress:
             for i in range(1,Nt_truth):  # Note: -1 because the initial condition is already added
                 x += dt * F(x)
@@ -49,7 +49,8 @@ class Lorenz63Dataset(Dataset):
 
     def __getitem__(self, idx):
         idx = min(idx, len(self.data)-self.prev_time_steps-1) # To avoid negative index
-        return torch.tensor(self.data[idx:idx+self.prev_time_steps].flatten(), dtype=torch.float32), torch.tensor(self.target[idx], dtype=torch.float32)
+        idx = max(idx, self.prev_time_steps)
+        return torch.tensor(self.data[idx-self.prev_time_steps:idx].flatten(), dtype=torch.float32), torch.tensor(self.target[idx-1], dtype=torch.float32)
 
     def inverse_transform(self, x):
         return self.scaler.inverse_transform(x)

@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from os.path import join
 
-def plot_x_y_da(xx, yy, title='', save_path='', show_figure=False):
+def plot_x_y_da(xx, yy, title='', save_path='', show_figure=True):
     yy_oz = np.zeros((yy.shape[0], 3))
     for i in range(yy_oz.shape[0]):
         yy_oz[i,:] = [yy[i][0], yy[i][1], yy[i][2]]
