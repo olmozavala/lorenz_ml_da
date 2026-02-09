@@ -138,24 +138,28 @@ content = html.Div([
             dbc.Container([
                 html.H3("Model vs Truth Evaluation", className="mt-4"),
                 dbc.Row([
-                    dbc.Col([\
+                    dbc.Col([
                         dbc.Label("Select Trained Model"),
                         dcc.Dropdown(id="eval-model-select", options=[]),
                         dbc.Button("🔄 Refresh List", id="refresh-models-btn", color="info", className="mt-2 btn-sm"),
-                    ], width=4),
-                    dbc.Col([\
+                    ], width=3),
+                    dbc.Col([
+                        dbc.Label("Eval dt"),
+                        dbc.Input(id="eval-dt", type="number", value=0.01, step=0.001),
+                    ], width=1),
+                    dbc.Col([
                         dbc.Label("Forecast Steps"),
-                        dbc.Input(id="eval-steps", type="number", value=100),
+                        dbc.Input(id="eval-steps", type="number", value=200),
                     ], width=2),
-                    dbc.Col([\
+                    dbc.Col([
                         dbc.Label("Ensemble Size"),
-                        dbc.Input(id="eval-ens-size", type="number", value=5),
+                        dbc.Input(id="eval-ens-size", type="number", value=20),
                     ], width=2),
-                    dbc.Col([\
+                    dbc.Col([
                         dbc.Label("IC Noise (σ)"),
                         dbc.Input(id="eval-noise", type="number", value=0.1, step=0.01),
                     ], width=2),
-                    dbc.Col([\
+                    dbc.Col([
                         dbc.Button("⚡ Run Eval", id="eval-run-btn", color="success", className="mt-4 w-100"),
                     ], width=2),
                 ]),
@@ -254,8 +258,10 @@ def training_thread_func(config):
         model_name = f"{config['model_type']}_L{config['system_type']}_{int(time.time())}"
         training_state['model_name'] = model_name
         
-        # Save config + architecture to YAML right away so it's available for eval even if training is stopped
+        # Save config + architecture + scaler to YAML right away so it's available for eval even if training is stopped
         config['architecture'] = arch_meta
+        config['train_mean'] = dataset.scaler.mean_.tolist()
+        config['train_std'] = dataset.scaler.scale_.tolist()
         config_path = f"models/{model_name}.yml"
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
@@ -333,7 +339,7 @@ def update_metrics(n):
                       yaxis=dict(exponentformat='power'),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
-    # Only draw the trajectory plot once (first tick after data is ready)
+    # Draw the trajectory plot once data is available
     traj = training_state.get('sample_trajectory')
     if traj is not None and not training_state.get('_traj_drawn'):
         traj_fig = go.Figure()
@@ -342,7 +348,7 @@ def update_metrics(n):
             traj_fig.add_trace(go.Scatter3d(x=traj[:,0], y=traj[:,1], z=traj[:,2], mode='lines', line=dict(color='royalblue', width=3), name='Training Sample'))
             traj_fig.add_trace(go.Scatter3d(x=[traj[0,0]], y=[traj[0,1]], z=[traj[0,2]], mode='markers', marker=dict(size=6, color='limegreen'), name='Start'))
             traj_fig.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0, r=0, b=0, t=0))
-        training_state['_traj_drawn'] = True
+            training_state['_traj_drawn'] = True
     else:
         traj_fig = dash.no_update
     
@@ -429,11 +435,12 @@ def show_model_config(model_file):
      Output("eval-y-plot", "figure"),
      Output("eval-z-plot", "figure")],
     [Input("eval-run-btn", "n_clicks")],
-    [State("eval-model-select", "value"), State("eval-steps", "value"), 
+    [State("eval-model-select", "value"), State("eval-dt", "value"),
+     State("eval-steps", "value"), 
      State("eval-ens-size", "value"), State("eval-noise", "value")],
     prevent_initial_call=True
 )
-def run_eval(n, model_file, steps, ens_size, noise_std):
+def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
     empty = [go.Figure()]*4
     if not model_file: return empty
     
@@ -460,10 +467,8 @@ def run_eval(n, model_file, steps, ens_size, noise_std):
         nx = meta['input_size']
         prev_steps = meta['prev_time_steps']
         
-        # Read dt from YAML config
-        dt = cfg.get('dt', 0.01)
-        save_dt = cfg.get('save_dt', 10)
-        eval_dt = dt * save_dt
+        # Use user-supplied eval dt (this is the effective dt per step for both truth and ML)
+        eval_dt = float(eval_dt_input) if eval_dt_input else 0.01
         
         # Init Model
         m_class = DenseNN if meta['model_type'] == 'Dense' else (ResDenseNN if meta['model_type'] == 'ResDense' else LSTMNN)
@@ -479,13 +484,17 @@ def run_eval(n, model_file, steps, ens_size, noise_std):
         else:
             # Raw state_dict (from _best_model.pth) — load weights directly
             model.load_state_dict(cp)
-            # Try to get mean/std from the full checkpoint if it exists
-            full_pth = os.path.join("models", f"{base}.pth")
-            if os.path.exists(full_pth):
-                full_cp = torch.load(full_pth, map_location='cpu', weights_only=False)
-                mean, std = full_cp['train_mean'], full_cp['train_std']
+            # Get mean/std from YAML, or from full checkpoint
+            if 'train_mean' in cfg and 'train_std' in cfg:
+                mean = np.array(cfg['train_mean'])
+                std = np.array(cfg['train_std'])
             else:
-                raise ValueError("Cannot find train_mean/train_std: no full checkpoint available.")
+                full_pth = os.path.join("models", f"{base}.pth")
+                if os.path.exists(full_pth):
+                    full_cp = torch.load(full_pth, map_location='cpu', weights_only=False)
+                    mean, std = full_cp['train_mean'], full_cp['train_std']
+                else:
+                    raise ValueError("Cannot find train_mean/train_std in YAML or checkpoint.")
         model.eval()
         
         # Base initial condition
@@ -548,15 +557,18 @@ def run_eval(n, model_file, steps, ens_size, noise_std):
         fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
         
         # --- 1D Plots ---
+        time_axis = np.arange(steps) * eval_dt
+        
         def mk1d(idx, title):
             f = go.Figure()
             for i, t in enumerate(truth_trajs):
-                f.add_trace(go.Scatter(y=t[:, idx], line=dict(color='rgba(0, 0, 180, 0.4)', width=1),
+                f.add_trace(go.Scatter(x=time_axis, y=t[:, idx], line=dict(color='rgba(0, 0, 180, 0.4)', width=1),
                                        showlegend=(i==0), name='Truth'))
             for i, m in enumerate(ml_trajs):
-                f.add_trace(go.Scatter(y=m[:, idx], line=dict(color='rgba(255, 50, 50, 0.35)', width=1),
+                t_ml = np.arange(len(m)) * eval_dt
+                f.add_trace(go.Scatter(x=t_ml, y=m[:, idx], line=dict(color='rgba(255, 50, 50, 0.35)', width=1),
                                        showlegend=(i==0), name='ML'))
-            f.update_layout(title=title, margin=dict(l=20,r=20,t=30,b=20), height=200)
+            f.update_layout(title=title, xaxis_title='Time', margin=dict(l=20,r=20,t=30,b=20), height=200)
             return f
 
         return fig3d, mk1d(0, "X (t)"), mk1d(1, "Y (t)"), mk1d(2, "Z (t)")
