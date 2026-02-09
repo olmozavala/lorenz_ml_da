@@ -50,7 +50,12 @@ sidebar = html.Div(
             clearable=False,
         ),
         
-        html.Div(id="equation-display", className="mt-3 mb-3 p-3 bg-light border rounded"),
+        # Equation Area
+        html.Div(
+            id="equation-display", 
+            className="mt-3 mb-3 p-3 bg-light border rounded",
+            children=dcc.Markdown(EQUATIONS['L63'], mathjax=True)
+        ),
 
         # Parameters
         html.Div([
@@ -150,9 +155,15 @@ app.layout = html.Div([sidebar, content])
 app.clientside_callback(
     """
     function(children) {
-        if (window.MathJax && window.MathJax.Hub) {
-            window.MathJax.Hub.Queue(["Typeset", window.MathJax.Hub, "equation-display"]);
+        function typeset() {
+            if (window.MathJax && window.MathJax.Hub) {
+                window.MathJax.Hub.Queue(["Typeset", window.MathJax.Hub, "equation-display"]);
+            } else {
+                // Retry in 500ms if MathJax not ready
+                setTimeout(typeset, 500);
+            }
         }
+        typeset();
         return window.dash_clientside.no_update;
     }
     """,
