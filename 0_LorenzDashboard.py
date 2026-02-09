@@ -101,7 +101,7 @@ sidebar = html.Div(
                 dbc.Row([
                     dbc.Col([
                         dbc.Label("dt"),
-                        dbc.Input(id="dt-input", type="number", value=0.01, step=0.01),
+                        dbc.Input(id="dt-input", type="number", value=0.01, step=0.001),
                     ]),
                     dbc.Col([
                         dbc.Label("Steps"),
@@ -298,4 +298,4 @@ def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, b
         return [go.Figure()]*4 + [f"Error: {str(e)}"]
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5006, host='0.0.0.0')
+    app.run(debug=True, port=5007, host='0.0.0.0')

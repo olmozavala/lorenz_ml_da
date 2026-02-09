@@ -71,7 +71,7 @@ sidebar = html.Div([
         
         dbc.AccordionItem([
             dbc.Row([
-                dbc.Col([dbc.Label("dt"), dbc.Input(id="dt", type="number", value=0.01)]),
+                dbc.Col([dbc.Label("dt"), dbc.Input(id="dt", type="number", value=0.001)]),
                 dbc.Col([dbc.Label("Save_Dt (Skip)"), dbc.Input(id="save-dt", type="number", value=10)]),
             ]),
             dbc.Row([
@@ -112,44 +112,52 @@ content = html.Div([
             dbc.Container([
                 dbc.Row([
                     dbc.Col([
-                        html.H3("Real-time Learning Curves", className="mt-4"),
-                        dcc.Graph(id="loss-graph", style={"height": "500px"}),
+                        html.H5("Real-time Learning Curves", className="mt-4"),
+                        dcc.Graph(id="loss-graph", style={"height": "550px"}),
                         dcc.Interval(id="interval-update", interval=1000, n_intervals=0, disabled=True),
-                    ], width=12),
+                    ], lg=6, xs=12),
+                    dbc.Col([
+                        html.H5("Sample Training Trajectory", className="mt-4"),
+                        dcc.Graph(id="sample-traj-plot", style={"height": "550px"}),
+                    ], lg=6, xs=12),
                 ]),
                 dbc.Card([
                     dbc.CardHeader("Training Console"),
                     dbc.CardBody([
                         html.Pre(id="training-log", style={"whiteSpace": "pre-wrap", "fontFamily": "monospace", "height": "100px", "overflowY": "auto"})
                     ])
-                ], className="mt-4"),
-                dbc.Card([
-                    dbc.CardHeader("Sample Training Trajectory"),
-                    dbc.CardBody(dcc.Graph(id="sample-traj-plot", style={"height": "400px"}))
-                ], className="mt-4")
+                ], className="mt-3")
             ], fluid=True)
         ]),
         dcc.Tab(label='🧪 Evaluation', value='tab-eval', className="custom-tab", selected_className="custom-tab--selected", children=[
             dbc.Container([
                 html.H3("Model vs Truth Evaluation", className="mt-4"),
                 dbc.Row([
-                    dbc.Col([
+                    dbc.Col([\
                         dbc.Label("Select Trained Model"),
                         dcc.Dropdown(id="eval-model-select", options=[]),
                         dbc.Button("🔄 Refresh List", id="refresh-models-btn", color="info", className="mt-2 btn-sm"),
                     ], width=4),
-                    dbc.Col([
+                    dbc.Col([\
                         dbc.Label("Forecast Steps"),
                         dbc.Input(id="eval-steps", type="number", value=100),
                     ], width=2),
-                    dbc.Col([
+                    dbc.Col([\
                         dbc.Label("Ensemble Size"),
                         dbc.Input(id="eval-ens-size", type="number", value=5),
                     ], width=2),
-                    dbc.Col([
+                    dbc.Col([\
+                        dbc.Label("IC Noise (σ)"),
+                        dbc.Input(id="eval-noise", type="number", value=0.1, step=0.01),
+                    ], width=2),
+                    dbc.Col([\
                         dbc.Button("⚡ Run Eval", id="eval-run-btn", color="success", className="mt-4 w-100"),
-                    ], width=4),
+                    ], width=2),
                 ]),
+                dbc.Card([
+                    dbc.CardHeader("Model Configuration"),
+                    dbc.CardBody(html.Pre(id="model-config-summary", style={"whiteSpace": "pre-wrap", "fontFamily": "monospace", "fontSize": "0.85rem", "margin": 0}))
+                ], className="mt-3 mb-3"),
                 html.Hr(),
                 dbc.Row([
                     dbc.Col(dbc.Card([dbc.CardBody(dcc.Graph(id="eval-3d-plot", style={"height": "55vh"}))], className="shadow-sm border-0"), width=12),
@@ -245,14 +253,15 @@ def training_thread_func(config):
         model_name = f"{config['model_type']}_L{config['system_type']}_{int(time.time())}"
         training_state['model_name'] = model_name
         
-        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress, device=device)
-        
-        save_model(model, f"models/{model_name}", dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
-        
-        # Save config to YAML
+        # Save config + architecture to YAML right away so it's available for eval even if training is stopped
+        config['architecture'] = arch_meta
         config_path = f"models/{model_name}.yml"
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
+        
+        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress, device=device)
+        
+        save_model(model, f"models/{model_name}", dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
         
     except Exception as e:
         print(f"Error in training thread: {e}")
@@ -278,7 +287,8 @@ def start_tra(n, m, s, l_n, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st,
     training_state = {
         'is_training': True, 'stop_requested': False,
         'history': {'epochs': [], 'train_loss': [], 'val_loss': []},
-        'current_epoch': 0, 'rollout_steps': 1, 'model_name': ''
+        'current_epoch': 0, 'rollout_steps': 1, 'model_name': '',
+        'sample_trajectory': None, '_traj_drawn': False
     }
     
     config = {
@@ -319,17 +329,21 @@ def update_metrics(n):
         fig.add_trace(go.Scatter(x=history['epochs'], y=history['train_loss'], name='Train', line=dict(color='#e74c3c')))
         fig.add_trace(go.Scatter(x=history['epochs'], y=history['val_loss'], name='Val', line=dict(color='#3498db')))
     fig.update_layout(template="simple_white", yaxis_type="log", margin=dict(l=40, r=40, t=40, b=40),
+                      yaxis=dict(exponentformat='power'),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
-    # Sample trajectory figure
-    traj_fig = go.Figure()
+    # Only draw the trajectory plot once (first tick after data is ready)
     traj = training_state.get('sample_trajectory')
-    if traj is not None:
+    if traj is not None and not training_state.get('_traj_drawn'):
+        traj_fig = go.Figure()
         nx = traj.shape[1]
         if nx >= 3:
             traj_fig.add_trace(go.Scatter3d(x=traj[:,0], y=traj[:,1], z=traj[:,2], mode='lines', line=dict(color='royalblue', width=3), name='Training Sample'))
             traj_fig.add_trace(go.Scatter3d(x=[traj[0,0]], y=[traj[0,1]], z=[traj[0,2]], mode='markers', marker=dict(size=6, color='limegreen'), name='Start'))
             traj_fig.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0, r=0, b=0, t=0))
+        training_state['_traj_drawn'] = True
+    else:
+        traj_fig = dash.no_update
     
     done = not training_state['is_training'] and training_state['current_epoch'] > 0
     
@@ -351,83 +365,206 @@ def refresh_models_list(n, tab):
     return [{"label": f, "value": f} for f in sorted(files, reverse=True)]
 
 @app.callback(
+    Output("model-config-summary", "children"),
+    Input("eval-model-select", "value"),
+    prevent_initial_call=True
+)
+def show_model_config(model_file):
+    if not model_file:
+        return "Select a model to see its configuration."
+    try:
+        path = os.path.join("models", model_file)
+        
+        # Find matching YAML (strip _best_model suffix if present)
+        base = model_file.replace('_best_model.pth', '').replace('.pth', '')
+        yml_path = os.path.join("models", f"{base}.yml")
+        
+        # Try architecture from checkpoint first, fall back to YAML
+        meta = {}
+        if os.path.exists(path):
+            cp = torch.load(path, map_location='cpu', weights_only=False)
+            meta = cp.get('architecture', {})
+        
+        cfg = {}
+        if os.path.exists(yml_path):
+            with open(yml_path, 'r') as f:
+                cfg = yaml.safe_load(f) or {}
+            # YAML may contain architecture if checkpoint doesn't
+            if not meta and 'architecture' in cfg:
+                meta = cfg['architecture']
+        
+        lines = ["═══ Architecture ═══"]
+        lines.append(f"  Model Type:      {meta.get('model_type', '?')}")
+        lines.append(f"  Lorenz System:   L{meta.get('system', '?')}")
+        lines.append(f"  Input Size (nx): {meta.get('input_size', '?')}")
+        lines.append(f"  History Steps:   {meta.get('prev_time_steps', '?')}")
+        lines.append(f"  Hidden Layers:   {meta.get('hidden_layers', '?')}")
+        
+        if cfg:
+            lines.append(f"\n═══ Training Parameters ═══")
+            lines.append(f"  dt:              {cfg.get('dt', '?')}")
+            lines.append(f"  Save Dt (skip):  {cfg.get('save_dt', '?')}")
+            dt_val = cfg.get('dt', 0)
+            sdt_val = cfg.get('save_dt', 1)
+            if isinstance(dt_val, (int, float)) and isinstance(sdt_val, (int, float)):
+                lines.append(f"  Effective Δt:    {dt_val * sdt_val:.4f}")
+            lines.append(f"  Random Locs:     {cfg.get('num_locs', '?')}")
+            lines.append(f"  Samples/Loc:     {cfg.get('samples_per_loc', '?')}")
+            lines.append(f"  Batch Size:      {cfg.get('batch_size', '?')}")
+            lines.append(f"  Patience:        {cfg.get('patience', '?')}")
+            lines.append(f"  Loss Function:   {cfg.get('loss_func', '?')}")
+            lines.append(f"  Split (T/V/Te):  {cfg.get('split_train','?')}% / {cfg.get('split_val','?')}% / {cfg.get('split_test','?')}%")
+        else:
+            lines.append("\n⚠ No YAML config found for this model.")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error reading config: {str(e)}"
+
+
+@app.callback(
     [Output("eval-3d-plot", "figure"),
      Output("eval-x-plot", "figure"),
      Output("eval-y-plot", "figure"),
      Output("eval-z-plot", "figure")],
     [Input("eval-run-btn", "n_clicks")],
-    [State("eval-model-select", "value"), State("eval-steps", "value"), State("eval-ens-size", "value")],
+    [State("eval-model-select", "value"), State("eval-steps", "value"), 
+     State("eval-ens-size", "value"), State("eval-noise", "value")],
     prevent_initial_call=True
 )
-def run_eval(n, model_file, steps, ens_size):
-    if not model_file: return [go.Figure()]*4
+def run_eval(n, model_file, steps, ens_size, noise_std):
+    empty = [go.Figure()]*4
+    if not model_file: return empty
     
-    path = os.path.join("models", model_file)
-    cp = torch.load(path, map_location='cpu', weights_only=False)
-    meta = cp['architecture']
-    
-    nx = meta['input_size']
-    prev_steps = meta['prev_time_steps']
-    
-    # Init Model
-    m_class = DenseNN if meta['model_type'] == 'Dense' else (ResDenseNN if meta['model_type'] == 'ResDense' else LSTMNN)
-    if meta['model_type'] == 'LSTM':
-        model = m_class(nx, prev_steps, nx, meta['hidden_layers'][0])
-    else:
-        model = m_class(nx, prev_steps, nx, meta['hidden_layers'], nn.ReLU, None)
-    
-    model.load_state_dict(cp['model_state_dict'])
-    model.eval()
-    
-    mean, std = cp['train_mean'], cp['train_std']
-    
-    # Build Evaluation
-    # 1. True Trajectory (Lorenz)
-    dt = 0.01 # Assumption for eval
-    x0 = np.random.normal(0, 1, nx)
-    sys = meta['system']
-    true_traj = LorenzSystems.generate_trajectory(sys, x0, dt, steps, N=meta.get('N', 40))
-    
-    # ML Forecast (Batchized on GPU)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    
-    # Generate initial history for all ensemble members
-    hist_list = []
-    for i in range(ens_size):
-        curr_x0 = x0 + np.random.normal(0, 0.01, nx) if i > 0 else x0
-        hist = LorenzSystems.generate_trajectory(sys, curr_x0, dt, prev_steps, N=meta.get('N', 40))
-        hist_list.append(hist)
-    
-    all_hists = np.stack(hist_list) # (ens, prev_steps, nx)
-    hists_norm = (all_hists - mean) / std
-    input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1), dtype=torch.float32).to(device)
-    
-    with torch.no_grad():
-        preds_norm = recursive_rollout(model, input_seqs, steps - prev_steps, prev_steps, device)
-        preds = preds_norm.cpu().numpy() * std + mean # (ens, steps-prev, nx)
-    
-    ml_trajs = [np.vstack([all_hists[i], preds[i]]) for i in range(ens_size)]
+    try:
+        path = os.path.join("models", model_file)
+        cp = torch.load(path, map_location='cpu', weights_only=False)
+        
+        # Find matching YAML (strip _best_model suffix if present)
+        base = model_file.replace('_best_model.pth', '').replace('.pth', '')
+        yml_path = os.path.join("models", f"{base}.yml")
+        
+        # Read architecture: from checkpoint if available, else from YAML
+        meta = cp.get('architecture', None)
+        cfg = {}
+        if os.path.exists(yml_path):
+            with open(yml_path, 'r') as f:
+                cfg = yaml.safe_load(f) or {}
+        
+        if meta is None:
+            meta = cfg.get('architecture', {})
+        if not meta:
+            raise ValueError("No architecture metadata found in checkpoint or YAML!")
+        
+        nx = meta['input_size']
+        prev_steps = meta['prev_time_steps']
+        
+        # Read dt from YAML config
+        dt = cfg.get('dt', 0.01)
+        save_dt = cfg.get('save_dt', 10)
+        eval_dt = dt * save_dt
+        
+        # Init Model
+        m_class = DenseNN if meta['model_type'] == 'Dense' else (ResDenseNN if meta['model_type'] == 'ResDense' else LSTMNN)
+        if meta['model_type'] == 'LSTM':
+            model = m_class(nx, prev_steps, nx, meta['hidden_layers'][0])
+        else:
+            model = m_class(nx, prev_steps, nx, meta['hidden_layers'], nn.ReLU, None)
+        
+        # Handle both checkpoint formats: full (dict with model_state_dict) and raw state_dict
+        if 'model_state_dict' in cp:
+            model.load_state_dict(cp['model_state_dict'])
+            mean, std = cp['train_mean'], cp['train_std']
+        else:
+            # Raw state_dict (from _best_model.pth) — load weights directly
+            model.load_state_dict(cp)
+            # Try to get mean/std from the full checkpoint if it exists
+            full_pth = os.path.join("models", f"{base}.pth")
+            if os.path.exists(full_pth):
+                full_cp = torch.load(full_pth, map_location='cpu', weights_only=False)
+                mean, std = full_cp['train_mean'], full_cp['train_std']
+            else:
+                raise ValueError("Cannot find train_mean/train_std: no full checkpoint available.")
+        model.eval()
+        
+        # Base initial condition
+        x0 = np.array([1.0, 1.0, 1.0]) if nx == 3 else np.random.normal(0, 1, nx)
+        sys_type = meta['system']
+        eval_params = {'N': meta['N']} if sys_type == '96' else {}
+        if noise_std is None:
+            noise_std = 0.1
+        
+        # 1) Generate TRUTH ensemble (perturbed ICs through full Lorenz)
+        truth_trajs = []
+        for i in range(ens_size):
+            xi = x0 + np.random.normal(0, noise_std, nx) if i > 0 else x0
+            traj = LorenzSystems.generate_trajectory(sys_type, xi, eval_dt, steps, **eval_params)
+            truth_trajs.append(traj)
+        
+        # 2) ML ensemble: use first prev_steps of EACH truth traj as shared history
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
+        
+        # Extract the shared history (first prev_steps of each truth trajectory)
+        all_hists = np.stack([t[:prev_steps] for t in truth_trajs])  # (ens, prev_steps, nx)
+        hists_norm = (all_hists - mean) / std
+        input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1), dtype=torch.float32).to(device)
+        
+        with torch.no_grad():
+            preds_norm = recursive_rollout(model, input_seqs, steps - prev_steps, prev_steps, device)
+            preds = preds_norm.cpu().numpy() * std + mean
+        
+        # ML trajectory = shared history + ML predictions
+        ml_trajs = [np.vstack([all_hists[i], preds[i]]) for i in range(ens_size)]
 
-    # Plots
-    fig3d = go.Figure()
-    fig3d.add_trace(go.Scatter3d(x=true_traj[:,0], y=true_traj[:,1], z=true_traj[:,2 if nx>=3 else 0], 
-                                 mode='lines', line=dict(color='blue', width=4), name='Truth'))
-    for i, m in enumerate(ml_trajs):
-        fig3d.add_trace(go.Scatter3d(x=m[:,0], y=m[:,1], z=m[:,2 if nx>=3 else 0], 
-                                     mode='lines', line=dict(color='red', width=1), opacity=0.4, 
-                                     showlegend=(i==0), name='ML Prediction'))
-    fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
-    
-    def mk1d(idx, title):
-        f = go.Figure()
-        f.add_trace(go.Scatter(y=true_traj[:, idx], name='Truth', line=dict(color='blue')))
-        for m in ml_trajs:
-            f.add_trace(go.Scatter(y=m[:, idx], line=dict(color='red', width=1), opacity=0.3, showlegend=False))
-        f.update_layout(title=title, margin=dict(l=20,r=20,t=30,b=20), height=200)
-        return f
+        # --- 3D Plot ---
+        zi = 2 if nx >= 3 else 0
+        fig3d = go.Figure()
+        
+        # Green dot at initial location
+        fig3d.add_trace(go.Scatter3d(
+            x=[x0[0]], y=[x0[1]], z=[x0[zi]],
+            mode='markers', marker=dict(size=8, color='limegreen', symbol='diamond'),
+            name='Initial Condition', showlegend=True
+        ))
+        
+        # Truth ensemble (transparent blue)
+        for i, t in enumerate(truth_trajs):
+            fig3d.add_trace(go.Scatter3d(
+                x=t[:,0], y=t[:,1], z=t[:,zi],
+                mode='lines', line=dict(color='rgba(0, 0, 180, 0.4)', width=2),
+                showlegend=(i==0), name='Truth Ensemble'
+            ))
+        
+        # ML ensemble (transparent red)
+        for i, m in enumerate(ml_trajs):
+            fig3d.add_trace(go.Scatter3d(
+                x=m[:,0], y=m[:,1], z=m[:,zi],
+                mode='lines', line=dict(color='rgba(255, 50, 50, 0.35)', width=2),
+                showlegend=(i==0), name='ML Ensemble'
+            ))
+        
+        fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
+        
+        # --- 1D Plots ---
+        def mk1d(idx, title):
+            f = go.Figure()
+            for i, t in enumerate(truth_trajs):
+                f.add_trace(go.Scatter(y=t[:, idx], line=dict(color='rgba(0, 0, 180, 0.4)', width=1),
+                                       showlegend=(i==0), name='Truth'))
+            for i, m in enumerate(ml_trajs):
+                f.add_trace(go.Scatter(y=m[:, idx], line=dict(color='rgba(255, 50, 50, 0.35)', width=1),
+                                       showlegend=(i==0), name='ML'))
+            f.update_layout(title=title, margin=dict(l=20,r=20,t=30,b=20), height=200)
+            return f
 
-    return fig3d, mk1d(0, "X (t)"), mk1d(1, "Y (t)"), mk1d(2, "Z (t)")
+        return fig3d, mk1d(0, "X (t)"), mk1d(1, "Y (t)"), mk1d(2, "Z (t)")
+    
+    except Exception as e:
+        traceback.print_exc()
+        err_fig = go.Figure()
+        err_fig.update_layout(title=f"Error: {str(e)}", template="simple_white")
+        return [err_fig]*4
 
 if __name__ == '__main__':
     app.run(debug=True, port=8050, host='0.0.0.0')
