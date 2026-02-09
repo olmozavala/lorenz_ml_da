@@ -28,7 +28,8 @@ training_state = {
     'history': {'epochs': [], 'train_loss': [], 'val_loss': []},
     'current_epoch': 0,
     'rollout_steps': 1,
-    'model_name': 'dash_model'
+    'model_name': 'dash_model',
+    'sample_trajectory': None  # Store one raw trajectory for preview
 }
 
 app = dash.Dash(__name__, 
@@ -75,7 +76,7 @@ sidebar = html.Div([
             ]),
             dbc.Row([
                 dbc.Col([dbc.Label("Random Locations"), dbc.Input(id="num-locs", type="number", value=10)]),
-                dbc.Col([dbc.Label("Samples/Loc"), dbc.Input(id="ns-per-loc", type="number", value=5000)]),
+                dbc.Col([dbc.Label("Samples/Loc"), dbc.Input(id="ns-per-loc", type="number", value=10000)]),
             ]),
             dbc.Label("Split Train/Val/Test (%)"),
             dbc.Row([
@@ -87,7 +88,7 @@ sidebar = html.Div([
         
         dbc.AccordionItem([
             dbc.Row([
-                dbc.Col([dbc.Label("Batch Size"), dbc.Input(id="batch-size", type="number", value=1024)]),
+                dbc.Col([dbc.Label("Batch Size"), dbc.Input(id="batch-size", type="number", value=2048)]),
                 dbc.Col([dbc.Label("Patience"), dbc.Input(id="patience", type="number", value=20)]),
             ]),
             dbc.Label("Hidden Layers (e.g., 64,64,32)"),
@@ -121,6 +122,10 @@ content = html.Div([
                     dbc.CardBody([
                         html.Pre(id="training-log", style={"whiteSpace": "pre-wrap", "fontFamily": "monospace", "height": "100px", "overflowY": "auto"})
                     ])
+                ], className="mt-4"),
+                dbc.Card([
+                    dbc.CardHeader("Sample Training Trajectory"),
+                    dbc.CardBody(dcc.Graph(id="sample-traj-plot", style={"height": "400px"}))
                 ], className="mt-4")
             ], fluid=True)
         ]),
@@ -189,6 +194,9 @@ def training_thread_func(config):
             **sys_params
         )
         
+        # Store first raw trajectory for visualization (data_list is pre-normalization)
+        training_state['sample_trajectory'] = dataset.data_list[0] if dataset.data_list else None
+        
         # Splits
         total = len(dataset)
         train_sz = int(total * config['split_train'] / 100)
@@ -198,8 +206,8 @@ def training_thread_func(config):
         
         # Optimization: Use pin_memory and more workers
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        train_loader = DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, pin_memory=(device.type=='cuda'), num_workers=2)
-        val_loader = DataLoader(val_set, batch_size=config['batch_size'], pin_memory=(device.type=='cuda'), num_workers=2)
+        train_loader = DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, pin_memory=(device.type=='cuda'))
+        val_loader = DataLoader(val_set, batch_size=config['batch_size'], pin_memory=(device.type=='cuda'))
         
         # Model
         input_size = 3 if config['system_type'] == '63' else config['n_l96']
@@ -299,7 +307,8 @@ def stop_training(n):
      Output("training-log", "children", allow_duplicate=True),
      Output("start-btn", "disabled", allow_duplicate=True),
      Output("stop-btn", "disabled", allow_duplicate=True),
-     Output("interval-update", "disabled", allow_duplicate=True)],
+     Output("interval-update", "disabled", allow_duplicate=True),
+     Output("sample-traj-plot", "figure")],
     [Input("interval-update", "n_intervals")],
     prevent_initial_call=True
 )
@@ -312,14 +321,25 @@ def update_metrics(n):
     fig.update_layout(template="simple_white", yaxis_type="log", margin=dict(l=40, r=40, t=40, b=40),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
+    # Sample trajectory figure
+    traj_fig = go.Figure()
+    traj = training_state.get('sample_trajectory')
+    if traj is not None:
+        nx = traj.shape[1]
+        if nx >= 3:
+            traj_fig.add_trace(go.Scatter3d(x=traj[:,0], y=traj[:,1], z=traj[:,2], mode='lines', line=dict(color='royalblue', width=3), name='Training Sample'))
+            traj_fig.add_trace(go.Scatter3d(x=[traj[0,0]], y=[traj[0,1]], z=[traj[0,2]], mode='markers', marker=dict(size=6, color='limegreen'), name='Start'))
+            traj_fig.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0, r=0, b=0, t=0))
+    
     done = not training_state['is_training'] and training_state['current_epoch'] > 0
     
     if done:
         status = f"DONE. Saved: {training_state['model_name']}.pth"
-        return fig, status, False, True, True  # re-enable start, disable stop, disable interval
+        return fig, status, False, True, True, traj_fig
     
     status = f"Running Epoch: {training_state['current_epoch']} | Rollout Stage: {training_state['rollout_steps']}"
-    return fig, status, True, False, False  # keep start disabled, stop enabled, interval active
+    return fig, status, True, False, False, traj_fig
+
 
 
 @app.callback(
