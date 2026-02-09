@@ -44,7 +44,7 @@ def recursive_rollout(model, initial_input, num_steps, prev_time_steps):
     return torch.stack(outputs_list, dim=1) # (batch, num_steps, 3)
 
 # Training loop
-def train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping):
+def train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, progress_callback=None):
     writer = SummaryWriter(log_dir=f'runs/{model_name}')
     best_val_loss = float('inf')
     best_model_name = join('models',f'{model_name}_best_model.pth')
@@ -52,8 +52,10 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
     gamma = 0.9 # Decay factor for multi-step loss
     last_rollout_steps = 0
     
+    history = {'train_loss': [], 'val_loss': [], 'epochs': []}
+    
     for epoch in range(num_epochs):
-        # Segmented schedule logic (Doubled)
+        # Segmented schedule logic
         if epoch < 20:
             rollout_steps = 1
         elif epoch < 60:
@@ -67,15 +69,9 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
             
         # Reset Early Stopping if rollout depth increases
         if rollout_steps > last_rollout_steps:
-            if last_rollout_steps > 0:
-                print(f"\n--- Transitioning to Rollout: {rollout_steps} steps (Epoch {epoch+1}) ---")
             early_stopping.counter = 0
             early_stopping.best_loss = None # Force accepting the new (likely higher) loss level
             last_rollout_steps = rollout_steps
-            # We don't reset best_val_loss because that tracks the GLOBAL best model for saving.
-            # However, since the loss function itself changes (becomes harder), 
-            # we should probably track the best within each curriculum phase to save effectively.
-            # For now, let's just allow it to save whenever it improves the current multi-step loss.
 
         model.train()
         train_loss = 0.0
@@ -120,24 +116,27 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
 
         print(f'Epoch {epoch+1}/{num_epochs} [Train Rollout: {rollout_steps} steps | Val Rollout: {val_rollout_steps}], Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
 
-        # Save model if validation loss improves. 
-        # Note: best_val_loss is reset indirectly by early_stopping.best_loss to handle curriculum.
+        history['epochs'].append(epoch + 1)
+        history['train_loss'].append(train_loss)
+        history['val_loss'].append(val_loss)
+
+        if progress_callback:
+            progress_callback(epoch + 1, train_loss, val_loss, rollout_steps)
+
+        # Save model if validation loss improves.
         if early_stopping.best_loss is None or val_loss < early_stopping.best_loss:
              torch.save(model.state_dict(), best_model_name)
 
         if early_stopping(val_loss):
-            print(f"Early stopping for Rollout level {rollout_steps}. Moving to next phase or finishing.")
             # If we are in the middle of the curriculum, we skip remaining epochs of this phase
-            if rollout_steps < 5:
-                # Find the start epoch of the next phase
-                if rollout_steps == 1: epoch = 19
-                elif rollout_steps == 2: epoch = 59
-                elif rollout_steps == 3: epoch = 119
-                elif rollout_steps == 4: epoch = 199
+            if rollout_steps >= 5:
                 break 
-            else:
-                break
+            # Advance to next phase
+            if rollout_steps == 1: epoch = 19
+            elif rollout_steps == 2: epoch = 59
+            elif rollout_steps == 3: epoch = 119
+            elif rollout_steps == 4: epoch = 199
 
     writer.close()
     model.load_state_dict(torch.load(best_model_name, weights_only=False))
-    return model
+    return model, history

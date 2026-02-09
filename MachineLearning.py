@@ -84,13 +84,36 @@ class ResDenseNN(nn.Module):
         delta = self.network(x)
         return current_state + delta
 
+class LSTMNN(nn.Module):
+    def __init__(self, input_size, prev_time_steps, output_size, hidden_size, num_layers=1):
+        super(LSTMNN, self).__init__()
+        self.input_size = input_size
+        self.prev_time_steps = prev_time_steps
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, output_size)
 
-def save_model(model, model_name, train_mean, train_std):
-	checkpoint = {'model_state_dict': model.state_dict(),
-	'train_mean': train_mean,
-	'train_std': train_std
-	}
-	torch.save(checkpoint, f"{model_name}.pth")
+    def forward(self, x):
+        # x: (batch, input_size * prev_time_steps)
+        # Reshape to (batch, prev_time_steps, input_size)
+        x = x.view(-1, self.prev_time_steps, self.input_size)
+        out, _ = self.lstm(x)
+        # out: (batch, seq_len, hidden_size)
+        # Take the last output
+        out = out[:, -1, :]
+        return self.fc(out)
+
+def save_model(model, model_path, train_mean, train_std, architecture):
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'train_mean': train_mean,
+        'train_std': train_std,
+        'architecture': architecture
+    }
+    torch.save(checkpoint, f"{model_path}.pth")
+
 def load_model(model_path, model_class, input_size, prev_time_steps, output_size, hidden_layers, hidden_activation, output_activation):
     checkpoint = torch.load(model_path, map_location=torch.device('cpu'), weights_only=False)  # Load checkpoint
     model = model_class(input_size, prev_time_steps, output_size, hidden_layers, hidden_activation, output_activation)  # Initialize model
