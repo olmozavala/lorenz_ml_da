@@ -65,7 +65,7 @@ sidebar = html.Div([
                 dbc.Input(id="l96-n", type="number", value=40),
             ], id="l96-n-div", style={"display": "none"}),
             dbc.Label("History Steps (Input size)"),
-            dbc.Input(id="prev-steps", type="number", value=5),
+            dbc.Input(id="prev-steps", type="number", value=3),
         ], title="Architecture"),
         
         dbc.AccordionItem([
@@ -87,7 +87,7 @@ sidebar = html.Div([
         
         dbc.AccordionItem([
             dbc.Row([
-                dbc.Col([dbc.Label("Batch Size"), dbc.Input(id="batch-size", type="number", value=128)]),
+                dbc.Col([dbc.Label("Batch Size"), dbc.Input(id="batch-size", type="number", value=1024)]),
                 dbc.Col([dbc.Label("Patience"), dbc.Input(id="patience", type="number", value=20)]),
             ]),
             dbc.Label("Hidden Layers (e.g., 64,64,32)"),
@@ -284,8 +284,22 @@ def start_tra(n, m, s, l_n, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st,
     return False, True, False, "Initializating dataset and model...\n"
 
 @app.callback(
-    [Output("loss-graph", "figure"),
+    [Output("stop-btn", "disabled", allow_duplicate=True),
      Output("training-log", "children", allow_duplicate=True)],
+    [Input("stop-btn", "n_clicks")],
+    prevent_initial_call=True
+)
+def stop_training(n):
+    global training_state
+    training_state['stop_requested'] = True
+    return True, "Stop requested. Training will halt after current epoch..."
+
+@app.callback(
+    [Output("loss-graph", "figure"),
+     Output("training-log", "children", allow_duplicate=True),
+     Output("start-btn", "disabled", allow_duplicate=True),
+     Output("stop-btn", "disabled", allow_duplicate=True),
+     Output("interval-update", "disabled", allow_duplicate=True)],
     [Input("interval-update", "n_intervals")],
     prevent_initial_call=True
 )
@@ -298,11 +312,15 @@ def update_metrics(n):
     fig.update_layout(template="simple_white", yaxis_type="log", margin=dict(l=40, r=40, t=40, b=40),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     
-    status = f"Running Epoch: {training_state['current_epoch']} | Multi-step Rollout Stage: {training_state['rollout_steps']}"
-    if not training_state['is_training'] and training_state['current_epoch'] > 0:
+    done = not training_state['is_training'] and training_state['current_epoch'] > 0
+    
+    if done:
         status = f"DONE. Saved: {training_state['model_name']}.pth"
-        
-    return fig, status
+        return fig, status, False, True, True  # re-enable start, disable stop, disable interval
+    
+    status = f"Running Epoch: {training_state['current_epoch']} | Rollout Stage: {training_state['rollout_steps']}"
+    return fig, status, True, False, False  # keep start disabled, stop enabled, interval active
+
 
 @app.callback(
     Output("eval-model-select", "options"),

@@ -142,4 +142,3 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
     writer.close()
     model.load_state_dict(torch.load(best_model_name, weights_only=False))
     return model, history
-助力
