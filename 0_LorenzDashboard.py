@@ -61,16 +61,18 @@ sidebar = html.Div(
         html.Div([
             # L63 Params
             html.Div([
-                dbc.Label("Sigma (σ)"),
-                dbc.Input(id="sigma-input", type="number", value=10.0, step=0.1),
-                dbc.Label("Beta (β)"),
-                dbc.Input(id="beta-input", type="number", value=2.6, step=0.1),
-                dbc.Label("Rho (ρ)"),
-                dbc.Input(id="rho-input", type="number", value=28.0, step=0.1),
-                dbc.Label("Initial Y0"),
-                dbc.Input(id="y0-input", type="number", value=10.0, step=0.1),
-                dbc.Label("Initial Z0"),
-                dbc.Input(id="z0-input", type="number", value=1.0, step=0.1),
+                dbc.Label("Physics Parameters"),
+                dbc.Row([
+                    dbc.Col([dbc.Label("Sigma (σ)"), dbc.Input(id="sigma-input", type="number", value=10.0, step=0.1)]),
+                    dbc.Col([dbc.Label("Beta (β)"), dbc.Input(id="beta-input", type="number", value=2.6, step=0.1)]),
+                    dbc.Col([dbc.Label("Rho (ρ)"), dbc.Input(id="rho-input", type="number", value=28.0, step=0.1)]),
+                ]),
+                html.Hr(),
+                dbc.Label("Initial Conditions"),
+                dbc.Row([
+                    dbc.Col([dbc.Label("y₀"), dbc.Input(id="y0-input", type="number", value=1.0, step=0.1)]),
+                    dbc.Col([dbc.Label("z₀"), dbc.Input(id="z0-input", type="number", value=1.0, step=0.1)]),
+                ]),
             ], id="l63-params-div"),
             
             # L96 Params
@@ -93,6 +95,9 @@ sidebar = html.Div(
         dbc.Card([
             dbc.CardHeader("Global Settings"),
             dbc.CardBody([
+                dbc.Label("Global Initial State (x₀)"),
+                dbc.Input(id="x0-input", type="number", value=1.0, step=0.1),
+                html.Hr(),
                 dbc.Row([
                     dbc.Col([
                         dbc.Label("dt"),
@@ -103,8 +108,6 @@ sidebar = html.Div(
                         dbc.Input(id="steps-input", type="number", value=500, step=100),
                     ]),
                 ]),
-                dbc.Label("Initial X0 / State[0]"),
-                dbc.Input(id="x0-input", type="number", value=4.0, step=0.1),
                 html.Hr(),
                 dbc.Label("Ensemble Size"),
                 dcc.Slider(id="ens-size-slider", min=1, max=20, step=1, value=5, marks={1: '1', 5: '5', 10: '10', 20: '20'}),
@@ -193,9 +196,9 @@ def toggle_ui(model):
     [State("model-select", "value"),
      State("dt-input", "value"),
      State("steps-input", "value"),
-     State("x0-input", "value"),
-     State("y0-input", "value"),
-     State("z0-input", "value"),
+     State("x0-input", "value"), # Global x0 input
+     State("y0-input", "value"), # L63 specific
+     State("z0-input", "value"), # L63 specific
      State("ens-size-slider", "value"),
      State("pert-input", "value"),
      State("sigma-input", "value"),
@@ -217,13 +220,13 @@ def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, b
         time = np.linspace(0, steps*dt, steps)
         
         if model == 'L63':
-            x_init = [float(x0 or 4.0), float(y0 or 10.0), float(z0 or 1.0)]
+            x_init = [float(x0 or 1.0), float(y0 or 1.0), float(z0 or 1.0)]
             params = {'sigma': float(sigma or 10.0), 'beta': float(beta or 2.6), 'rho': float(rho or 28.0)}
             labels = ['X', 'Y', 'Z']
             indices = [0, 1, 2]
         else:
             N = int(n_vars if n_vars is not None else 40)
-            x_init = np.ones(N) * float(x0 if x0 is not None else 4.0)
+            x_init = np.ones(N) * float(x0 if x0 is not None else 1.0)
             # Add some slight variation to the truth state in L96 to see patterns faster
             x_init[0] += 0.01
             params = {'F': float(f_param if f_param is not None else 8.0)}
