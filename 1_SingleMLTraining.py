@@ -196,8 +196,10 @@ def training_thread_func(config):
         test_sz = total - train_sz - val_sz
         train_set, val_set, test_set = random_split(dataset, [train_sz, val_sz, test_sz])
         
-        train_loader = DataLoader(train_set, batch_size=config['batch_size'], shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=config['batch_size'])
+        # Optimization: Use pin_memory and more workers
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        train_loader = DataLoader(train_set, batch_size=config['batch_size'], shuffle=True, pin_memory=(device.type=='cuda'), num_workers=2)
+        val_loader = DataLoader(val_set, batch_size=config['batch_size'], pin_memory=(device.type=='cuda'), num_workers=2)
         
         # Model
         input_size = 3 if config['system_type'] == '63' else config['n_l96']
@@ -235,7 +237,7 @@ def training_thread_func(config):
         model_name = f"{config['model_type']}_L{config['system_type']}_{int(time.time())}"
         training_state['model_name'] = model_name
         
-        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress)
+        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress, device=device)
         
         save_model(model, f"models/{model_name}", dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
         
@@ -348,19 +350,26 @@ def run_eval(n, model_file, steps, ens_size):
     sys = meta['system']
     true_traj = LorenzSystems.generate_trajectory(sys, x0, dt, steps, N=meta.get('N', 40))
     
-    # 2. ML Trajectories (Ensemble)
-    ml_trajs = []
+    # ML Forecast (Batchized on GPU)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    
+    # Generate initial history for all ensemble members
+    hist_list = []
     for i in range(ens_size):
         curr_x0 = x0 + np.random.normal(0, 0.01, nx) if i > 0 else x0
-        # Warm up history
         hist = LorenzSystems.generate_trajectory(sys, curr_x0, dt, prev_steps, N=meta.get('N', 40))
-        # Normalize
-        hist_norm = (hist - mean) / std
-        input_seq = torch.tensor(hist_norm.flatten(), dtype=torch.float32).unsqueeze(0)
-        
-        preds_norm = recursive_rollout(model, input_seq, steps - prev_steps, prev_steps)
-        preds = preds_norm.squeeze(0).detach().numpy() * std + mean
-        ml_trajs.append(np.vstack([hist, preds]))
+        hist_list.append(hist)
+    
+    all_hists = np.stack(hist_list) # (ens, prev_steps, nx)
+    hists_norm = (all_hists - mean) / std
+    input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1), dtype=torch.float32).to(device)
+    
+    with torch.no_grad():
+        preds_norm = recursive_rollout(model, input_seqs, steps - prev_steps, prev_steps, device)
+        preds = preds_norm.cpu().numpy() * std + mean # (ens, steps-prev, nx)
+    
+    ml_trajs = [np.vstack([all_hists[i], preds[i]]) for i in range(ens_size)]
 
     # Plots
     fig3d = go.Figure()
