@@ -11,6 +11,7 @@ import time
 import os
 import sys
 import traceback
+import yaml
 
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, save_model, load_model
 from datasets.LorenzDataset import LorenzDataset
@@ -237,6 +238,11 @@ def training_thread_func(config):
         train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress)
         
         save_model(model, f"models/{model_name}", dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
+        
+        # Save config to YAML
+        config_path = f"models/{model_name}.yml"
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
         
     except Exception as e:
         print(f"Error in training thread: {e}")
