@@ -250,6 +250,15 @@ def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, b
             x=true_traj[:,indices[0]], y=true_traj[:,indices[1]], z=true_traj[:,indices[2]], 
             mode='lines', line=dict(color='darkblue', width=4), name='Truth'
         ))
+        # Add start point marker
+        fig_3d.add_trace(go.Scatter3d(
+            x=[true_traj[0, indices[0]]], 
+            y=[true_traj[0, indices[1]]], 
+            z=[true_traj[0, indices[2]]],
+            mode='markers',
+            marker=dict(size=8, color='limegreen', symbol='circle'),
+            name='Start Location'
+        ))
         fig_3d.update_layout(
             scene=dict(
                 xaxis_title=labels[0], 
