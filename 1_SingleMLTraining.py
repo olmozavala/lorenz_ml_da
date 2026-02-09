@@ -104,6 +104,11 @@ sidebar = html.Div([
     
     dbc.Button("🔥 Start Training", id="start-btn", color="danger", className="mt-4 w-100", size="lg"),
     dbc.Button("🛑 Stop Training", id="stop-btn", color="secondary", className="mt-2 w-100", disabled=True),
+    dbc.Card([
+        dbc.CardHeader("Model Configuration"),
+        dbc.CardBody(html.Pre(id="model-config-summary", style={"whiteSpace": "pre-wrap", "fontFamily": "monospace", "fontSize": "0.8rem", "margin": 0},
+                             children="Select a model in the Evaluation tab."))
+    ], className="mt-3"),
 ], className="sidebar p-4 bg-light shadow", style={"width": "26rem", "position": "fixed", "top": 0, "left": 0, "bottom": 0, "overflowY": "auto"})
 
 content = html.Div([
@@ -154,10 +159,6 @@ content = html.Div([
                         dbc.Button("⚡ Run Eval", id="eval-run-btn", color="success", className="mt-4 w-100"),
                     ], width=2),
                 ]),
-                dbc.Card([
-                    dbc.CardHeader("Model Configuration"),
-                    dbc.CardBody(html.Pre(id="model-config-summary", style={"whiteSpace": "pre-wrap", "fontFamily": "monospace", "fontSize": "0.85rem", "margin": 0}))
-                ], className="mt-3 mb-3"),
                 html.Hr(),
                 dbc.Row([
                     dbc.Col(dbc.Card([dbc.CardBody(dcc.Graph(id="eval-3d-plot", style={"height": "55vh"}))], className="shadow-sm border-0"), width=12),
