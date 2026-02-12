@@ -29,6 +29,13 @@ $$\frac{dz}{dt} = xy - \beta z$$
     'L96': r"""
 For $i = 1, \dots, N$:
 $$\frac{dx_i}{dt} = (x_{i+1} - x_{i-2})x_{i-1} - x_i + F$$
+""",
+    'L05': r"""
+**Lorenz 2005 Model II** (Spatially Continuous)  
+For $n = 1, \dots, N$:
+$$\frac{dx_n}{dt} = [x, x]_{n,K} - x_n + F$$
+where $[x, y]_{n,K}$ is a bilinear operator with smoothing parameter $K$.  
+If $K=1$, it reduces to Lorenz 96.
 """
 }
 
@@ -45,6 +52,7 @@ sidebar = html.Div(
             options=[
                 {"label": "Lorenz 63", "value": "L63"},
                 {"label": "Lorenz 96", "value": "L96"},
+                {"label": "Lorenz 2005", "value": "L05"},
             ],
             value="L63",
             clearable=False,
@@ -89,6 +97,23 @@ sidebar = html.Div(
                     dbc.Col(dbc.Input(id="v3-idx", type="number", value=2, min=0, step=1)),
                 ]),
             ], id="l96-params-div", style={"display": "none"}),
+
+            # L05 Params
+            html.Div([
+                dbc.Row([
+                    dbc.Col([dbc.Label("Forcing (F)"), dbc.Input(id="f-input-05", type="number", value=8.0, step=0.1)]),
+                    dbc.Col([dbc.Label("Smoothing (K)"), dbc.Input(id="k-input-05", type="number", value=3, step=1, min=1)]),
+                ]),
+                dbc.Label("Dimension (N)"),
+                dbc.Input(id="n-input-05", type="number", value=40, step=1),
+                html.Hr(),
+                dbc.Label("Display Variables (indices)"),
+                dbc.Row([
+                    dbc.Col(dbc.Input(id="v1-idx-05", type="number", value=0, min=0, step=1)),
+                    dbc.Col(dbc.Input(id="v2-idx-05", type="number", value=1, min=0, step=1)),
+                    dbc.Col(dbc.Input(id="v3-idx-05", type="number", value=2, min=0, step=1)),
+                ]),
+            ], id="l05-params-div", style={"display": "none"}),
         ], className="mt-3"),
         
         # Simulation Settings
@@ -177,14 +202,17 @@ app.clientside_callback(
 @app.callback(
     [Output("l63-params-div", "style"),
      Output("l96-params-div", "style"),
+     Output("l05-params-div", "style"),
      Output("equation-display", "children")],
     [Input("model-select", "value")]
 )
 def toggle_ui(model):
     if model == 'L63':
-        return {"display": "block"}, {"display": "none"}, dcc.Markdown(EQUATIONS['L63'], mathjax=True)
+        return {"display": "block"}, {"display": "none"}, {"display": "none"}, dcc.Markdown(EQUATIONS['L63'], mathjax=True)
+    elif model == 'L96':
+        return {"display": "none"}, {"display": "block"}, {"display": "none"}, dcc.Markdown(EQUATIONS['L96'], mathjax=True)
     else:
-        return {"display": "none"}, {"display": "block"}, dcc.Markdown(EQUATIONS['L96'], mathjax=True)
+        return {"display": "none"}, {"display": "none"}, {"display": "block"}, dcc.Markdown(EQUATIONS['L05'], mathjax=True)
 
 @app.callback(
     [Output("3d-plot", "figure"),
@@ -208,9 +236,15 @@ def toggle_ui(model):
      State("n-input", "value"),
      State("v1-idx", "value"),
      State("v2-idx", "value"),
-     State("v3-idx", "value")]
+     State("v3-idx", "value"),
+     State("f-input-05", "value"),
+     State("n-input-05", "value"),
+     State("k-input-05", "value"),
+     State("v1-idx-05", "value"),
+     State("v2-idx-05", "value"),
+     State("v3-idx-05", "value")]
 )
-def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, beta, rho, f_param, n_vars, v1, v2, v3):
+def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, beta, rho, f_param, n_vars, v1, v2, v3, f05, n05, k05, v1_05, v2_05, v3_05):
     if n_clicks is None:
         return [go.Figure()]*4 + ["Ready to simulate..."]
     
@@ -224,7 +258,7 @@ def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, b
             params = {'sigma': float(sigma or 10.0), 'beta': float(beta or 2.6), 'rho': float(rho or 28.0)}
             labels = ['X', 'Y', 'Z']
             indices = [0, 1, 2]
-        else:
+        elif model == 'L96':
             N = int(n_vars if n_vars is not None else 40)
             x_init = np.ones(N) * float(x0 if x0 is not None else 1.0)
             # Add some slight variation to the truth state in L96 to see patterns faster
@@ -243,15 +277,39 @@ def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, b
                 indices.append(min(max(0, val), N-1))
             
             labels = [f'x<sub>{i+1}</sub>' for i in indices]
+        else: # L05
+            N = int(n05 if n05 is not None else 40)
+            x_init = np.ones(N) * float(x0 if x0 is not None else 1.0)
+            x_init[0] += 0.01
+            params = {'F': float(f05 if f05 is not None else 8.0), 'K': int(k05 if k05 is not None else 3)}
+            
+            v_idxs = [v1_05, v2_05, v3_05]
+            defaults = [0, 1, 2]
+            indices = []
+            for i, v in enumerate(v_idxs):
+                try:
+                    val = int(v) if v is not None else defaults[i]
+                except (ValueError, TypeError):
+                    val = defaults[i]
+                indices.append(min(max(0, val), N-1))
+            
+            labels = [f'x<sub>{i+1}</sub>' for i in indices]
 
         # Run Truth
-        true_traj = LorenzSystems.generate_trajectory('63' if model == 'L63' else '96', x_init, dt, steps, **params)
+        if model == 'L63':
+            m_type = '63'
+        elif model == 'L96':
+            m_type = '96'
+        else:
+            m_type = '05'
+            
+        true_traj = LorenzSystems.generate_trajectory(m_type, x_init, dt, steps, **params)
         
         # Run Ensemble
         ens_trajs = []
         for _ in range(int(ens_size or 5)):
             x0_pert = np.array(x_init) + np.random.normal(0, float(pert or 0.05), len(x_init))
-            ens_trajs.append(LorenzSystems.generate_trajectory('63' if model == 'L63' else '96', x0_pert, dt, steps, **params))
+            ens_trajs.append(LorenzSystems.generate_trajectory(m_type, x0_pert, dt, steps, **params))
 
         # Build Plots
         fig_3d = go.Figure()
