@@ -14,7 +14,7 @@ import traceback
 import yaml
 
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, save_model, load_model
-from datasets.LorenzDataset import LorenzDataset
+from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS, _SYSTEM_IC_CENTER
 from Training import train_model, EarlyStopping, recursive_rollout
 from lorenz.lorenz_systems import LorenzSystems
 
@@ -58,13 +58,36 @@ sidebar = html.Div([
             dbc.Label("Lorenz System"),
             dcc.Dropdown(
                 id="system-type",
-                options=[{"label": "Lorenz 63", "value": "63"}, {"label": "Lorenz 96 (N=40)", "value": "96"}],
+                options=[
+                    {"label": "Lorenz 63", "value": "63"},
+                    {"label": "Lorenz 96 (N=40)", "value": "96"},
+                    {"label": "Lorenz 2005 Model III (N=480)", "value": "05"},
+                ],
                 value="63"
             ),
             dbc.Label("History Steps (Input size)"),
             dbc.Input(id="prev-steps", type="number", value=3),
         ], title="Architecture"),
-        
+
+        dbc.AccordionItem([
+            html.Small(
+                "L63 uses σ=10 / ρ=28 / β=8/3 (fixed). "
+                "L96 uses F=8.0 (fixed). "
+                "The fields below apply only to Lorenz 2005 Model III.",
+                className="text-muted d-block mb-2"
+            ),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Label("L05 Forcing (F)"),
+                    dbc.Input(id="l05-F", type="number", value=15.0, step=0.5),
+                ]),
+                dbc.Col([
+                    dbc.Label("L05 Spatial Scale (K)"),
+                    dbc.Input(id="l05-K", type="number", value=32, step=1),
+                ]),
+            ]),
+        ], title="System Parameters"),
+
         dbc.AccordionItem([
             dbc.Row([
                 dbc.Col([dbc.Label("dt"), dbc.Input(id="dt", type="number", value=0.001)]),
@@ -181,10 +204,14 @@ def training_thread_func(config):
     global training_state
     try:
         # 1. Dataset Generation
+        # Build physics parameters passed to LorenzSystems / LorenzDataset.
+        # N is no longer included — _SYSTEM_DIMS in LorenzDataset enforces fixed sizes.
         sys_params = {}
         if config['system_type'] == '96':
-            sys_params['N'] = 40   # Fixed by DAPyr's compiled L96 kernel
-            sys_params['F'] = 8.0
+            sys_params['F'] = 8.0           # fixed forcing for L96
+        elif config['system_type'] == '05':
+            sys_params['F'] = float(config.get('l05_F', 15.0))
+            sys_params['K'] = int(config.get('l05_K', 32))
             
         dataset = LorenzDataset(
             system_type=config['system_type'],
@@ -212,16 +239,17 @@ def training_thread_func(config):
         val_loader = DataLoader(val_set, batch_size=config['batch_size'], pin_memory=(device.type=='cuda'))
         
         # Model
-        input_size = 3 if config['system_type'] == '63' else 40  # L96 N fixed by DAPyr
+        input_size = _SYSTEM_DIMS[config['system_type']]  # 3 / 40 / 480 fixed by DAPyr
         hidden_list = [int(x.strip()) for x in config['hidden_layers'].split(',')]
-        
+
         arch_meta = {
-            'model_type': config['model_type'],
-            'input_size': input_size,
+            'model_type':      config['model_type'],
+            'input_size':      input_size,
             'prev_time_steps': config['prev_steps'],
-            'hidden_layers': hidden_list,
-            'system': config['system_type'],
-            'N': sys_params.get('N', 40)
+            'hidden_layers':   hidden_list,
+            'system':          config['system_type'],
+            'N':               input_size,         # legacy field; same as input_size
+            'system_params':   sys_params,         # stored for eval reconstruction
         }
         
         if config['model_type'] == 'Dense':
@@ -275,10 +303,11 @@ def training_thread_func(config):
      State("dt", "value"), State("save-dt", "value"), State("prev-steps", "value"),
      State("num-locs", "value"), State("ns-per-loc", "value"), State("batch-size", "value"),
      State("patience", "value"), State("hidden-layers", "value"), State("loss-func", "value"),
-     State("split-train", "value"), State("split-val", "value"), State("split-test", "value")],
+     State("split-train", "value"), State("split-val", "value"), State("split-test", "value"),
+     State("l05-F", "value"), State("l05-K", "value")],
      prevent_initial_call=True
 )
-def start_tra(n, m, s, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st, sv, ste):
+def start_tra(n, m, s, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st, sv, ste, l05_f, l05_k):
     global training_state
     training_state = {
         'is_training': True, 'stop_requested': False,
@@ -286,12 +315,14 @@ def start_tra(n, m, s, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st, sv, 
         'current_epoch': 0, 'rollout_steps': 1, 'model_name': '',
         'sample_trajectory': None, '_traj_drawn': False
     }
-    
+
     config = {
         'model_type': m, 'system_type': s, 'dt': dt, 'save_dt': s_dt,
         'prev_steps': prev, 'num_locs': locs, 'samples_per_loc': ns,
         'batch_size': bs, 'patience': pat, 'hidden_layers': hidden, 'loss_func': loss,
-        'split_train': st, 'split_val': sv, 'split_test': ste
+        'split_train': st, 'split_val': sv, 'split_test': ste,
+        'l05_F': l05_f if l05_f is not None else 15.0,
+        'l05_K': l05_k if l05_k is not None else 32,
     }
     
     threading.Thread(target=training_thread_func, args=(config,), daemon=True).start()
@@ -486,13 +517,25 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
                     raise ValueError("Cannot find train_mean/train_std in YAML or checkpoint.")
         model.eval()
         
-        # Base initial condition
-        x0 = np.array([1.0, 1.0, 1.0]) if nx == 3 else np.ones(nx) * 8.0 + np.random.normal(0, 0.1, nx)
         sys_type = meta['system']
-        # For L96 pass F explicitly; N is fixed at 40 by DAPyr and inferred from x0 shape.
-        eval_params = {'F': 8.0} if sys_type == '96' else {}
         if noise_std is None:
             noise_std = 0.1
+
+        # Base IC near the attractor equilibrium for each system
+        if sys_type == '63':
+            x0 = np.array([1.0, 1.0, 1.0])
+        else:
+            center = _SYSTEM_IC_CENTER.get(sys_type, 8.0)
+            x0 = np.ones(nx) * center + np.random.normal(0, 0.1, nx)
+
+        # Physics parameters: read from arch_meta (stored at training time).
+        # Falls back to sensible defaults for checkpoints trained before this change.
+        eval_params = meta.get('system_params', {})
+        if not eval_params:
+            if sys_type == '96':
+                eval_params = {'F': 8.0}
+            elif sys_type == '05':
+                eval_params = {'F': 15.0, 'K': 32}
         
         # 1) Generate TRUTH ensemble (perturbed ICs through full Lorenz)
         truth_trajs = []
@@ -561,7 +604,12 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
             f.update_layout(title=title, xaxis_title='Time', margin=dict(l=20,r=20,t=30,b=20), height=200)
             return f
 
-        return fig3d, mk1d(0, "X (t)"), mk1d(1, "Y (t)"), mk1d(2, "Z (t)")
+        # For L63 use classic labels; for high-dim systems label by state index
+        if sys_type == '63':
+            dim_labels = ("X (t)", "Y (t)", "Z (t)")
+        else:
+            dim_labels = ("Z₀ (t)", "Z₁ (t)", "Z₂ (t)")
+        return fig3d, mk1d(0, dim_labels[0]), mk1d(1, dim_labels[1]), mk1d(2, dim_labels[2])
     
     except Exception as e:
         traceback.print_exc()

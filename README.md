@@ -140,27 +140,45 @@ All models take `prev_time_steps` consecutive states as input (flattened to `(ba
 
 ## Configuration
 
-`config.yml` controls batch training via `Main_ML.py`:
+`config.yml` controls batch training via `Main_ML.py`. Every key maps 1-to-1 with the sidebar of `1_SingleMLTraining.py`.
 
 ```yaml
 dataset:
-  system_type: '63'        # '63', '96', or '05'
-  dt: 0.01                 # Integration time step
-  ns: 5000                 # Integration steps per start location
-  save_dt: 10              # Subsampling factor (effective Δt = dt × save_dt)
-  prev_time_steps: 4       # History window fed to the model
+  system_type: '63'          # '63' | '96' | '05'
+  dt: 0.001                  # integration time step
+  ns: 10000                  # samples per start location
+  save_dt: 10                # subsampling factor  (effective Δt = dt × save_dt)
+  std: 0.0                   # observation noise std (0 = clean)
+  prev_time_steps: 3         # history window size fed to the model
+  num_start_locations: 10    # number of independent random-IC trajectories
+
+  # Physics parameters — leave empty {} for L63
+  # L96:  {F: 8.0}    L05:  {F: 15.0, K: 32}
+  system_params: {}
 
 model:
-  type: 'ResDenseNN'       # 'DenseNN', 'ResDenseNN', or 'LSTMNN'
-  hidden_layers: [64, 64, 32, 16]
+  type: 'ResDenseNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN'
+  hidden_layers: [64, 64, 32]
+  hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
 
 training:
-  num_epochs: 400
-  batch_size: 64
+  num_epochs: 500
+  batch_size: 2048
   learning_rate: 0.001
-  n_trials: 3
-  early_stopping_patience: 10
+  n_trials: 1                # independent runs (each saved separately with timestamp)
+  early_stopping_patience: 20
+  loss_func: 'MSE'           # 'MSE' | 'Huber'
+  split_train: 70
+  split_val: 20
+  split_test: 10
+
+paths:
+  outputs: 'outputs'         # full checkpoints + YAML configs saved here
+  models: 'models'
+  runs: 'runs'               # TensorBoard logs
 ```
+
+Checkpoints written by `Main_ML.py` use the same full format as the dashboard (`model_state_dict` + `train_mean/std` + `architecture`), so they can be loaded directly in the **Evaluation** tab of `1_SingleMLTraining.py`.
 
 ---
 

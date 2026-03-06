@@ -100,7 +100,7 @@ PyTorch `Dataset` that generates and normalises Lorenz trajectory data.
 2. Stack all locations' data into `self.data` and `self.target`
 3. Fit a `StandardScaler` on `self.data`, transform both arrays to zero-mean / unit-variance
 
-**State dimension for L96**: `LorenzDataset` reads `system_params.get('N', 40)` to size the random initial condition vector. Since DAPyr fixes L96 at N=40, callers must pass (or rely on the default of) `N=40`.
+**Fixed state dimensions**: `LorenzDataset` uses `_SYSTEM_DIMS = {'63': 3, '96': 40, '05': 480}` — the same constraints enforced by DAPyr's compiled kernels. `N` is no longer read from `system_params`. Passing an `x0` of the wrong length raises a `ValueError` immediately, before any integration is attempted.
 
 **Important attributes**:
 - `data_list` — Raw (pre-normalisation) subsampled trajectories per location. Used for 3D preview in the training dashboard.
@@ -238,15 +238,45 @@ Variable index inputs ────────→ [update_plots] ──→ 3d-pl
 
 ### `1_SingleMLTraining.py`
 
-Dash web application (port 8050) for ML training and evaluation.
+Dash web application (port 8050) for ML training and evaluation. Supports all three Lorenz systems: L63, L96 (N=40), and L05 Model III (N=480).
 
-**Changes from original**:
-- Removed `l96-n-div` / `l96-n` UI element and `toggle_n_l96` callback — N=40 is hardcoded
-- Dropdown label updated to "Lorenz 96 (N=40)" to communicate the constraint
-- `sys_params['N'] = 40` hardcoded in `training_thread_func` (used by `LorenzDataset` to size the L96 initial condition)
-- `input_size = 40` hardcoded for L96 in model construction
-- `eval_params = {'F': 8.0}` for L96 in the evaluation callback (previously passed `{'N': meta['N']}`, which `_get_funcptr` ignores)
-- L96 evaluation initial condition: `np.ones(40) * 8.0 + small_noise` — starts near the L96 forcing equilibrium rather than `Normal(0, 1)` which is unphysical
+**Sidebar accordion sections**:
+- **Architecture**: model type, system selector (L63 / L96 / L05), history steps
+- **System Parameters**: L05 Forcing F (default 15.0) and Spatial Scale K (default 32); L63 and L96 use fixed hardcoded defaults
+- **Data Generation**: dt, save_Dt, random locations, samples per location, train/val/test split
+- **Training Params**: batch size, patience, hidden layers, loss function
+
+**`training_thread_func` — system dispatch**:
+```python
+sys_params = {}
+if config['system_type'] == '96':
+    sys_params['F'] = 8.0
+elif config['system_type'] == '05':
+    sys_params['F'] = float(config['l05_F'])   # from UI, default 15.0
+    sys_params['K'] = int(config['l05_K'])     # from UI, default 32
+```
+`input_size = _SYSTEM_DIMS[system_type]` (3 / 40 / 480) — no longer hardcoded per branch.
+
+`arch_meta` now includes `'system_params': sys_params` so the evaluation callback can reconstruct the exact physics parameters without reading the training config separately.
+
+**Eval callback — IC construction**:
+```python
+if sys_type == '63':
+    x0 = np.array([1.0, 1.0, 1.0])
+else:
+    center = _SYSTEM_IC_CENTER.get(sys_type, 8.0)  # 8.0 for L96, 15.0 for L05
+    x0 = np.ones(nx) * center + Normal(0, 0.1)
+```
+
+**Eval callback — physics parameters**:
+```python
+eval_params = meta.get('system_params', {})  # from arch_meta stored at training time
+# fallback for older checkpoints without system_params:
+if not eval_params and sys_type == '96':  eval_params = {'F': 8.0}
+if not eval_params and sys_type == '05':  eval_params = {'F': 15.0, 'K': 32}
+```
+
+**1D plot axis labels**: "X(t)/Y(t)/Z(t)" for L63; "Z₀(t)/Z₁(t)/Z₂(t)" (first three state components) for L96/L05.
 
 #### Training thread flow
 
@@ -292,7 +322,47 @@ Plot truth (blue) vs ML (red) — 3D + 3 × 1D
 
 ### `Main_ML.py`
 
-Command-line batch training. Reads `config.yml`, creates `LorenzDataset`, runs `n_trials` independent training runs, saves full checkpoints to `outputs/`.
+Command-line batch training. Reads `config.yml`, creates `LorenzDataset`, runs `n_trials` independent training runs, saves full checkpoints to `outputs/`. Intentionally homologous with `1_SingleMLTraining.py`'s `training_thread_func` — any behaviour change in one should be mirrored in the other.
+
+#### `config.yml` schema
+
+| Section | Key | Maps to dashboard field |
+|---|---|---|
+| `dataset` | `system_type` | System dropdown (`'63'`/`'96'`/`'05'`) |
+| `dataset` | `dt` | dt input |
+| `dataset` | `ns` | Samples/Loc input |
+| `dataset` | `save_dt` | Save_Dt (Skip) input |
+| `dataset` | `std` | observation noise (no direct UI equivalent — dashboard uses 0) |
+| `dataset` | `prev_time_steps` | History Steps input |
+| `dataset` | `num_start_locations` | Random Locations input |
+| `dataset` | `system_params` | System Parameters accordion (`{F, K}` for L05; `{F}` for L96; `{}` for L63) |
+| `model` | `type` | Model Type dropdown (`'DenseNN'`/`'ResDenseNN'`/`'LSTMNN'`) |
+| `model` | `hidden_layers` | Hidden Layers input (list, not comma-string) |
+| `model` | `hidden_activation` | (hardcoded ReLU in dashboard) |
+| `training` | `num_epochs` | (hardcoded 500 in dashboard) |
+| `training` | `batch_size` | Batch Size input |
+| `training` | `learning_rate` | (hardcoded 1e-3 in dashboard) |
+| `training` | `n_trials` | (no UI equivalent — dashboard trains one model per run) |
+| `training` | `early_stopping_patience` | Patience input |
+| `training` | `loss_func` | Loss Function dropdown (`'MSE'`/`'Huber'`) |
+| `training` | `split_train/val/test` | Split Train/Val/Test inputs |
+
+#### Flow
+
+```
+load_config('config.yml')
+  → build sys_params from dataset.system_params  (same logic as training_thread_func)
+  → LorenzDataset(system_type, num_start_locations, **sys_params, ...)
+  → random_split(train / val / test)  using split_train / split_val / split_test %
+  → for trial in n_trials:
+      → build model (DenseNN / ResDenseNN / LSTMNN)
+      → build arch_meta  (same structure as dashboard, includes system_params)
+      → save .yml config immediately                    → outputs/{name}.yml
+      → train_model(..., device=device)
+      → save_model(..., arch_meta)                      → outputs/{name}.pth
+```
+
+**Checkpoint compatibility**: `Main_ML.py` writes the same full checkpoint format as the dashboard, so models trained from the CLI can be loaded directly in the **Evaluation** tab of `1_SingleMLTraining.py`. The `.yml` sidecar is also identical in structure to the dashboard's YAML, enabling `show_model_config` to display it correctly.
 
 ---
 

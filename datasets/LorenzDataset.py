@@ -5,23 +5,46 @@ from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
 from lorenz.lorenz_systems import LorenzSystems
 
+# Fixed state dimensions enforced by DAPyr compiled kernels.
+# L96 kernel hardcodes Nx=40; L05 kernel hardcodes Nx=480.
+_SYSTEM_DIMS = {'63': 3, '96': 40, '05': 480}
+
+# Approximate attractor equilibrium used to seed random ICs.
+# Starting near the forcing equilibrium reduces spin-up time.
+_SYSTEM_IC_CENTER = {'63': 0.0, '96': 8.0, '05': 15.0}
+
 class LorenzDataset(Dataset):
-    def __init__(self, system_type='63', x0=None, dt=0.01, Ns=5000, save_Dt=10, 
+    # Number of future target steps returned by __getitem__.
+    # Must stay in sync with Training.py (recursive_rollout target length).
+    _MAX_FUTURE = 10
+
+    def __init__(self, system_type='63', x0=None, dt=0.01, Ns=5000, save_Dt=10,
                  std=0.000, prev_time_steps=1, num_start_locations=1, **system_params):
-        
+
         self.data_list = []
         self.target_list = []
-        
-        nx = 3 if system_type == '63' else system_params.get('N', 40)
-        
+
+        if system_type not in _SYSTEM_DIMS:
+            raise ValueError(
+                f"Unknown system_type '{system_type}'. "
+                f"Expected one of {list(_SYSTEM_DIMS.keys())}."
+            )
+        nx = _SYSTEM_DIMS[system_type]
+
         for _ in range(num_start_locations):
             if x0 is None or num_start_locations > 1:
                 if system_type == '63':
-                    current_x0 = np.random.normal(0, 10, 3)
+                    current_x0 = np.random.normal(0, 10, nx)
                 else:
-                    current_x0 = np.random.rand(nx) * 0.1 + 8.0
+                    center = _SYSTEM_IC_CENTER[system_type]
+                    current_x0 = np.ones(nx) * center + np.random.normal(0, 0.1, nx)
             else:
-                current_x0 = x0
+                current_x0 = np.asarray(x0, dtype=float)
+                if len(current_x0) != nx:
+                    raise ValueError(
+                        f"Provided x0 has length {len(current_x0)}, "
+                        f"but system '{system_type}' requires N={nx}."
+                    )
 
             nt_truth = Ns * save_Dt + save_Dt
             
@@ -48,17 +71,36 @@ class LorenzDataset(Dataset):
         self.data = self.transform(self.data)
         self.target = self.transform(self.target)
 
+        # Precompute valid sample indices.
+        #
+        # After vstack, all locations are concatenated into one flat array.
+        # A sample at position `i` uses:
+        #   input  : self.data[i - prev_time_steps : i]          (history window)
+        #   targets: self.target[i - 1 : i - 1 + _MAX_FUTURE]   (future window)
+        #
+        # Both windows must lie entirely within one trajectory segment
+        # [k*Ns, (k+1)*Ns) to avoid mixing states from different ICs.
+        #   lower bound: i >= k*Ns + prev_time_steps
+        #   upper bound: i <= (k+1)*Ns - _MAX_FUTURE + 1
+        self._valid_indices = []
+        for k in range(num_start_locations):
+            seg_start = k * Ns
+            seg_end   = (k + 1) * Ns
+            lo = seg_start + prev_time_steps
+            hi = seg_end - self._MAX_FUTURE + 2   # +2 because range() is exclusive
+            self._valid_indices.extend(range(lo, hi))
+
     def __len__(self):
-        return len(self.data)
+        return len(self._valid_indices)
 
     def __getitem__(self, idx):
-        max_future = 10
-        idx = max(self.prev_time_steps, idx)
-        idx = min(idx, len(self.data) - max_future)
-        
-        input_seq = torch.tensor(self.data[idx-self.prev_time_steps:idx].flatten(), dtype=torch.float32)
-        targets = torch.tensor(self.target[idx-1 : idx-1 + max_future], dtype=torch.float32)
-        
+        i = self._valid_indices[idx]
+        input_seq = torch.tensor(
+            self.data[i - self.prev_time_steps : i].flatten(), dtype=torch.float32
+        )
+        targets = torch.tensor(
+            self.target[i - 1 : i - 1 + self._MAX_FUTURE], dtype=torch.float32
+        )
         return input_seq, targets
 
     def inverse_transform(self, x):

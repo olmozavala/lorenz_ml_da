@@ -1,112 +1,172 @@
 import os
+import time
+import yaml
 import torch
 import torch.nn as nn
-import yaml
 import numpy as np
 from torch.utils.data import DataLoader, random_split
-from datasets.LorenzDataset import LorenzDataset
-from MachineLearning import DenseNN, ResDenseNN, save_model
+
+from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS
+from MachineLearning import DenseNN, ResDenseNN, LSTMNN, save_model
 from Training import train_model, EarlyStopping
+
 
 def load_config(config_path='config.yml'):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
+
 def cleanup_checkpoints(paths_config):
-    """Removes old checkpoint files and tensorboard logs."""
+    """Removes .pth files from outputs/ and wipes the TensorBoard runs/ directory."""
     import glob
     import shutil
     for folder_key in ['outputs', 'models', 'runs']:
         folder = paths_config.get(folder_key)
         if not folder:
             continue
-            
-        if folder == 'runs' and os.path.exists(folder):
+        if folder_key == 'runs' and os.path.exists(folder):
             shutil.rmtree(folder)
             os.makedirs(folder)
             continue
-            
         if os.path.exists(folder):
-            files = glob.glob(os.path.join(folder, '*.pth'))
-            for f in files:
+            for f in glob.glob(os.path.join(folder, '*.pth')):
                 try:
                     os.remove(f)
                 except OSError as e:
                     print(f"Error removing {f}: {e.strerror}")
 
-def run_training(config):
-    # Parameters
-    dataset_cfg = config['dataset']
-    model_cfg = config['model']
-    train_cfg = config['training']
-    paths_cfg = config['paths']
-    
-    # Directories
-    os.makedirs(paths_cfg['outputs'], exist_ok=True)
-    os.makedirs(paths_cfg['models'], exist_ok=True)
-    os.makedirs(paths_cfg['runs'], exist_ok=True)
 
-    # Cleanup before starting new run
+def run_training(config):
+    dataset_cfg = config['dataset']
+    model_cfg   = config['model']
+    train_cfg   = config['training']
+    paths_cfg   = config['paths']
+
+    for path in paths_cfg.values():
+        os.makedirs(path, exist_ok=True)
+
     cleanup_checkpoints(paths_cfg)
 
-    # Create dataset
+    sys_type = dataset_cfg['system_type']
+
+    # --- Physics parameters (mirrors 1_SingleMLTraining.py training_thread_func) ---
+    raw_sp = dataset_cfg.get('system_params', {}) or {}
+    sys_params = {}
+    if sys_type == '96':
+        sys_params['F'] = float(raw_sp.get('F', 8.0))
+    elif sys_type == '05':
+        sys_params['F'] = float(raw_sp.get('F', 15.0))
+        sys_params['K'] = int(raw_sp.get('K', 32))
+
+    # --- Dataset ---
+    print(f"Building LorenzDataset — system={sys_type}, "
+          f"locs={dataset_cfg.get('num_start_locations', 1)}, "
+          f"Ns={dataset_cfg['ns']}, save_Dt={dataset_cfg['save_dt']}")
     dataset = LorenzDataset(
-        system_type=dataset_cfg['system_type'],
+        system_type=sys_type,
         dt=dataset_cfg['dt'],
         Ns=dataset_cfg['ns'],
         save_Dt=dataset_cfg['save_dt'],
-        std=dataset_cfg['std'],
-        prev_time_steps=dataset_cfg['prev_time_steps']
+        std=dataset_cfg.get('std', 0.0),
+        prev_time_steps=dataset_cfg['prev_time_steps'],
+        num_start_locations=dataset_cfg.get('num_start_locations', 1),
+        **sys_params
     )
-    
-    # Split dataset
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    
-    train_loader = DataLoader(train_dataset, batch_size=train_cfg['batch_size'], shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=train_cfg['batch_size'], shuffle=False)
-    
-    # Get normalization constants
-    train_mean = dataset.scaler.mean_
-    train_std = dataset.scaler.scale_
 
-    # Model Class selection
-    if model_cfg['type'] == 'ResDenseNN':
-        model_class = ResDenseNN
-    else:
-        model_class = DenseNN
+    # --- Train / val / test split ---
+    split_train = train_cfg.get('split_train', 70)
+    split_val   = train_cfg.get('split_val',   20)
+    split_test  = train_cfg.get('split_test',  100 - split_train - split_val)
+    total    = len(dataset)
+    train_sz = int(total * split_train / 100)
+    val_sz   = int(total * split_val   / 100)
+    test_sz  = total - train_sz - val_sz
+    train_set, val_set, _ = random_split(dataset, [train_sz, val_sz, test_sz])
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {device}  |  train={train_sz}  val={val_sz}  test={test_sz}")
+
+    train_loader = DataLoader(
+        train_set, batch_size=train_cfg['batch_size'],
+        shuffle=True,  pin_memory=(device.type == 'cuda'))
+    val_loader   = DataLoader(
+        val_set,   batch_size=train_cfg['batch_size'],
+        shuffle=False, pin_memory=(device.type == 'cuda'))
+
+    # --- Derived architecture constants ---
+    input_size  = _SYSTEM_DIMS[sys_type]      # 3 / 40 / 480 — fixed by DAPyr
+    prev_steps  = dataset_cfg['prev_time_steps']
+    hidden_list = model_cfg['hidden_layers']
+    model_type  = model_cfg['type']
+
+    activation_map = {'ReLU': nn.ReLU, 'Tanh': nn.Tanh, 'Sigmoid': nn.Sigmoid}
+    hidden_act = activation_map.get(model_cfg.get('hidden_activation', 'ReLU'), nn.ReLU)
+
+    loss_name = train_cfg.get('loss_func', 'MSE')
+    criterion = nn.MSELoss() if loss_name == 'MSE' else nn.HuberLoss()
+
+    # --- Trial loop ---
     for trial in range(1, train_cfg['n_trials'] + 1):
-        print(f"\n--- Trial {trial}/{train_cfg['n_trials']} ---")
-        
-        # Initialize model
-        # Input size is determined by the system type (e.g., L63 has 3, L96 has whatever x0 has)
-        # We can peek at the data to get input_size
-        sample_input, _ = dataset[0]
-        input_size_total = sample_input.shape[0]
-        input_size_single = input_size_total // dataset_cfg['prev_time_steps']
-        
-        activation_dict = {'ReLU': nn.ReLU, 'Tanh': nn.Tanh, 'Sigmoid': nn.Sigmoid}
-        hidden_act = activation_dict.get(model_cfg['hidden_activation'], nn.ReLU)
-        
-        model = model_class(
-            input_size=input_size_single,
-            prev_time_steps=dataset_cfg['prev_time_steps'],
-            output_size=input_size_single,
-            hidden_layers=model_cfg['hidden_layers'],
-            hidden_activation=hidden_act,
-            output_activation=None # Hardcoded for now as per legacy
-        )
-        
-        model_name = f"{model_cfg['type']}_{dataset_cfg['system_type']}_trial{trial}"
-        
-        criterion = nn.MSELoss() # Defaulting to MSELoss for now
-        optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg['learning_rate'])
+        print(f"\n{'='*60}")
+        print(f"  Trial {trial} / {train_cfg['n_trials']}  —  {model_type}  L{sys_type}")
+        print(f"{'='*60}")
+
+        # Build model
+        if model_type == 'DenseNN':
+            model = DenseNN(input_size, prev_steps, input_size, hidden_list, hidden_act, None)
+        elif model_type == 'ResDenseNN':
+            model = ResDenseNN(input_size, prev_steps, input_size, hidden_list, hidden_act, None)
+        elif model_type == 'LSTMNN':
+            model = LSTMNN(input_size, prev_steps, input_size, hidden_list[0])
+        else:
+            raise ValueError(
+                f"Unknown model type '{model_type}'. "
+                "Expected 'DenseNN', 'ResDenseNN', or 'LSTMNN'."
+            )
+
+        arch_meta = {
+            'model_type':      model_type,
+            'input_size':      input_size,
+            'prev_time_steps': prev_steps,
+            'hidden_layers':   hidden_list,
+            'system':          sys_type,
+            'N':               input_size,   # legacy field; same as input_size
+            'system_params':   sys_params,   # stored for eval reconstruction
+        }
+
+        optimizer      = torch.optim.Adam(model.parameters(), lr=train_cfg['learning_rate'])
         early_stopping = EarlyStopping(patience=train_cfg['early_stopping_patience'])
-        
-        # Train model
-        trained_model = train_model(
+
+        model_name = f"{model_type}_L{sys_type}_trial{trial}_{int(time.time())}"
+        save_path  = os.path.join(paths_cfg['outputs'], model_name)
+
+        # Save YAML config immediately — available even if training stops early
+        run_config = {
+            'model_type':      model_type,
+            'system_type':     sys_type,
+            'dt':              dataset_cfg['dt'],
+            'save_dt':         dataset_cfg['save_dt'],
+            'prev_steps':      prev_steps,
+            'num_locs':        dataset_cfg.get('num_start_locations', 1),
+            'samples_per_loc': dataset_cfg['ns'],
+            'batch_size':      train_cfg['batch_size'],
+            'patience':        train_cfg['early_stopping_patience'],
+            'hidden_layers':   str(hidden_list),
+            'loss_func':       loss_name,
+            'split_train':     split_train,
+            'split_val':       split_val,
+            'split_test':      split_test,
+            'architecture':    arch_meta,
+            'train_mean':      dataset.scaler.mean_.tolist(),
+            'train_std':       dataset.scaler.scale_.tolist(),
+        }
+        yml_path = os.path.join(paths_cfg['outputs'], f"{model_name}.yml")
+        with open(yml_path, 'w') as f:
+            yaml.dump(run_config, f, default_flow_style=False)
+        print(f"Config saved → {yml_path}")
+
+        # Train
+        train_model(
             model=model,
             model_name=model_name,
             train_loader=train_loader,
@@ -114,13 +174,14 @@ def run_training(config):
             criterion=criterion,
             optimizer=optimizer,
             num_epochs=train_cfg['num_epochs'],
-            early_stopping=early_stopping
+            early_stopping=early_stopping,
+            device=device,
         )
-        
-        # Save model
-        save_path = os.path.join(paths_cfg['outputs'], model_name)
-        save_model(trained_model, save_path, train_mean, train_std)
-        print(f"Saved model to {save_path}.pth")
+
+        # Save full checkpoint (weights + arch + scaler stats)
+        save_model(model, save_path, dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
+        print(f"Saved model → {save_path}.pth")
+
 
 if __name__ == "__main__":
     config = load_config()
