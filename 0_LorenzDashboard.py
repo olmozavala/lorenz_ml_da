@@ -9,7 +9,7 @@ import sys
 
 # Initialize Dash app
 app = dash.Dash(
-    __name__, 
+    __name__,
     external_stylesheets=[dbc.themes.FLATLY],
     suppress_callback_exceptions=True,
     external_scripts=[
@@ -27,15 +27,20 @@ $$\frac{dy}{dt} = x(\rho - z) - y$$
 $$\frac{dz}{dt} = xy - \beta z$$
 """,
     'L96': r"""
-For $i = 1, \dots, N$:
+For $i = 1, \dots, N$, with $N = 40$ (fixed):
 $$\frac{dx_i}{dt} = (x_{i+1} - x_{i-2})x_{i-1} - x_i + F$$
 """,
     'L05': r"""
-**Lorenz 2005 Model II** (Spatially Continuous)  
-For $n = 1, \dots, N$:
-$$\frac{dx_n}{dt} = [x, x]_{n,K} - x_n + F$$
-where $[x, y]_{n,K}$ is a bilinear operator with smoothing parameter $K$.  
-If $K=1$, it reduces to Lorenz 96.
+**Lorenz 2005 Model III** (Two-Scale), $N = 480$ (fixed)
+
+The state $Z_n$ is split into a large-scale component $X_n$ (extracted via a
+smoothing operator with half-width $I$) and a small-scale residual $Y_n = Z_n - X_n$:
+
+$$\frac{dZ_n}{dt} = [X,X]_{K,n} + b^2[Y,Y]_n + c\,[Y,X]_n - X_n - bY_n + F$$
+
+$[A,B]_{K,n}$ is a bilinear spatial operator with smoothing scale $K$,
+$b$ is the small-to-large amplitude ratio, and $c$ is the coupling strength.
+When $I = 1$ (no scale separation) the equation reduces to Model II.
 """
 }
 
@@ -45,7 +50,7 @@ sidebar = html.Div(
         html.H2("Lorenz Simulator", className="display-6"),
         html.Hr(),
         html.P("Interactive Lorenz Dynamics", className="lead"),
-        
+
         dbc.Label("Select Lorenz Model"),
         dcc.Dropdown(
             id="model-select",
@@ -57,10 +62,10 @@ sidebar = html.Div(
             value="L63",
             clearable=False,
         ),
-        
+
         # Equation Area
         html.Div(
-            id="equation-display", 
+            id="equation-display",
             className="mt-3 mb-3 p-3 bg-light border rounded",
             children=dcc.Markdown(EQUATIONS['L63'], mathjax=True)
         ),
@@ -82,13 +87,11 @@ sidebar = html.Div(
                     dbc.Col([dbc.Label("z₀"), dbc.Input(id="z0-input", type="number", value=1.0, step=0.1)]),
                 ]),
             ], id="l63-params-div"),
-            
-            # L96 Params
+
+            # L96 Params  (N=40 is fixed by the DAPyr compiled kernel)
             html.Div([
                 dbc.Label("Forcing (F)"),
                 dbc.Input(id="f-input", type="number", value=8.0, step=0.1),
-                dbc.Label("Dimension (N)"),
-                dbc.Input(id="n-input", type="number", value=40, step=1),
                 html.Hr(),
                 dbc.Label("Display Variables (indices)"),
                 dbc.Row([
@@ -98,14 +101,12 @@ sidebar = html.Div(
                 ]),
             ], id="l96-params-div", style={"display": "none"}),
 
-            # L05 Params
+            # L05 Params  (N=480 is fixed by the DAPyr compiled kernel)
             html.Div([
                 dbc.Row([
                     dbc.Col([dbc.Label("Forcing (F)"), dbc.Input(id="f-input-05", type="number", value=8.0, step=0.1)]),
                     dbc.Col([dbc.Label("Smoothing (K)"), dbc.Input(id="k-input-05", type="number", value=3, step=1, min=1)]),
                 ]),
-                dbc.Label("Dimension (N)"),
-                dbc.Input(id="n-input-05", type="number", value=40, step=1),
                 html.Hr(),
                 dbc.Label("Display Variables (indices)"),
                 dbc.Row([
@@ -115,7 +116,7 @@ sidebar = html.Div(
                 ]),
             ], id="l05-params-div", style={"display": "none"}),
         ], className="mt-3"),
-        
+
         # Simulation Settings
         dbc.Card([
             dbc.CardHeader("Global Settings"),
@@ -145,7 +146,7 @@ sidebar = html.Div(
     ],
     className="sidebar shadow-sm",
     style={
-        "position": "fixed", "top": 0, "left": 0, "bottom": 0, 
+        "position": "fixed", "top": 0, "left": 0, "bottom": 0,
         "width": "26rem", "padding": "2rem 1rem", "overflowY": "auto",
         "backgroundColor": "#ffffff", "borderRight": "1px solid #dee2e6"
     },
@@ -175,7 +176,12 @@ content = html.Div(
     style={"marginLeft": "28rem", "marginRight": "2rem", "paddingTop": "2rem"},
 )
 
-app.layout = html.Div([sidebar, content])
+app.layout = html.Div([
+    sidebar,
+    content,
+    # Stores computed trajectories so plots can be updated without recomputing
+    dcc.Store(id='traj-store'),
+])
 
 # --- Callbacks ---
 
@@ -214,146 +220,195 @@ def toggle_ui(model):
     else:
         return {"display": "none"}, {"display": "none"}, {"display": "block"}, dcc.Markdown(EQUATIONS['L05'], mathjax=True)
 
+
+# --- Callback 1: Run simulation → store trajectories ---
+# Only triggered by the Run button. Expensive computation happens here.
+
 @app.callback(
-    [Output("3d-plot", "figure"),
-     Output("x-plot", "figure"),
-     Output("y-plot", "figure"),
-     Output("z-plot", "figure"),
-     Output("stats-display", "children")],
-    [Input("run-btn", "n_clicks")],
+    [Output('traj-store', 'data'),
+     Output('stats-display', 'children')],
+    [Input('run-btn', 'n_clicks')],
     [State("model-select", "value"),
      State("dt-input", "value"),
      State("steps-input", "value"),
-     State("x0-input", "value"), # Global x0 input
-     State("y0-input", "value"), # L63 specific
-     State("z0-input", "value"), # L63 specific
+     State("x0-input", "value"),
+     State("y0-input", "value"),
+     State("z0-input", "value"),
      State("ens-size-slider", "value"),
      State("pert-input", "value"),
      State("sigma-input", "value"),
      State("beta-input", "value"),
      State("rho-input", "value"),
      State("f-input", "value"),
-     State("n-input", "value"),
-     State("v1-idx", "value"),
-     State("v2-idx", "value"),
-     State("v3-idx", "value"),
      State("f-input-05", "value"),
-     State("n-input-05", "value"),
-     State("k-input-05", "value"),
-     State("v1-idx-05", "value"),
-     State("v2-idx-05", "value"),
-     State("v3-idx-05", "value")]
+     State("k-input-05", "value")],
+    prevent_initial_call=True,
 )
-def execute_sim(n_clicks, model, dt, steps, x0, y0, z0, ens_size, pert, sigma, beta, rho, f_param, n_vars, v1, v2, v3, f05, n05, k05, v1_05, v2_05, v3_05):
-    if n_clicks is None:
-        return [go.Figure()]*4 + ["Ready to simulate..."]
-    
+def run_simulation(n_clicks, model, dt, steps, x0, y0, z0,
+                   ens_size, pert, sigma, beta, rho,
+                   f_param, f05, k05):
     try:
-        steps = int(steps or 500)
-        dt = float(dt or 0.01)
-        time = np.linspace(0, steps*dt, steps)
-        
-        if model == 'L63':
-            x_init = [float(x0 or 1.0), float(y0 or 1.0), float(z0 or 1.0)]
-            params = {'sigma': float(sigma or 10.0), 'beta': float(beta or 2.6), 'rho': float(rho or 28.0)}
-            labels = ['X', 'Y', 'Z']
-            indices = [0, 1, 2]
-        elif model == 'L96':
-            N = int(n_vars if n_vars is not None else 40)
-            x_init = np.ones(N) * float(x0 if x0 is not None else 1.0)
-            # Add some slight variation to the truth state in L96 to see patterns faster
-            x_init[0] += 0.01
-            params = {'F': float(f_param if f_param is not None else 8.0)}
-            
-            # Robust parsing of display indices
-            v_idxs = [v1, v2, v3]
-            defaults = [0, 1, 2]
-            indices = []
-            for i, v in enumerate(v_idxs):
-                try:
-                    val = int(v) if v is not None else defaults[i]
-                except (ValueError, TypeError):
-                    val = defaults[i]
-                indices.append(min(max(0, val), N-1))
-            
-            labels = [f'x<sub>{i+1}</sub>' for i in indices]
-        else: # L05
-            N = int(n05 if n05 is not None else 40)
-            x_init = np.ones(N) * float(x0 if x0 is not None else 1.0)
-            x_init[0] += 0.01
-            params = {'F': float(f05 if f05 is not None else 8.0), 'K': int(k05 if k05 is not None else 3)}
-            
-            v_idxs = [v1_05, v2_05, v3_05]
-            defaults = [0, 1, 2]
-            indices = []
-            for i, v in enumerate(v_idxs):
-                try:
-                    val = int(v) if v is not None else defaults[i]
-                except (ValueError, TypeError):
-                    val = defaults[i]
-                indices.append(min(max(0, val), N-1))
-            
-            labels = [f'x<sub>{i+1}</sub>' for i in indices]
+        steps    = int(steps or 500)
+        dt       = float(dt or 0.01)
+        ens_size = int(ens_size or 5)
 
-        # Run Truth
         if model == 'L63':
-            m_type = '63'
+            m_type  = '63'
+            x_init  = [float(x0 or 1.0), float(y0 or 1.0), float(z0 or 1.0)]
+            params  = {'sigma': float(sigma or 10.0),
+                       'beta':  float(beta  or 2.6),
+                       'rho':   float(rho   or 28.0)}
+
         elif model == 'L96':
-            m_type = '96'
-        else:
-            m_type = '05'
-            
+            m_type  = '96'
+            N       = 40  # Fixed by DAPyr's compiled L96 kernel
+            x_init  = np.ones(N) * float(x0 if x0 is not None else 1.0)
+            x_init[0] += 0.01
+            params  = {'F': float(f_param if f_param is not None else 8.0)}
+
+        else:  # L05
+            m_type  = '05'
+            N       = 480  # Fixed by DAPyr's compiled L05 kernel
+            x_init  = np.ones(N) * float(x0 if x0 is not None else 1.0)
+            x_init[0] += 0.01
+            params  = {'F': float(f05 if f05 is not None else 8.0),
+                       'K': int(k05   if k05 is not None else 3)}
+
+        time = np.linspace(0, steps * dt, steps).tolist()
+
         true_traj = LorenzSystems.generate_trajectory(m_type, x_init, dt, steps, **params)
-        
-        # Run Ensemble
-        ens_trajs = []
-        for _ in range(int(ens_size or 5)):
-            x0_pert = np.array(x_init) + np.random.normal(0, float(pert or 0.05), len(x_init))
-            ens_trajs.append(LorenzSystems.generate_trajectory(m_type, x0_pert, dt, steps, **params))
 
-        # Build Plots
+        ens_trajs = []
+        for _ in range(ens_size):
+            x0_pert = np.array(x_init) + np.random.normal(0, float(pert or 0.05), len(x_init))
+            ens_trajs.append(
+                LorenzSystems.generate_trajectory(m_type, x0_pert, dt, steps, **params).tolist()
+            )
+
+        store_data = {
+            'model':     model,
+            'true_traj': true_traj.tolist(),
+            'ens_trajs': ens_trajs,
+            'time':      time,
+            'N':         len(x_init),
+        }
+
+        stats = (f"Simulation complete — {steps} steps, dt={dt}, "
+                 f"ensemble size={ens_size}.")
+        return store_data, stats
+
+    except Exception as e:
+        print(f"Error in run_simulation: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return None, f"Error: {e}"
+
+
+# --- Callback 2: Render plots from stored trajectories ---
+# Triggered by new trajectory data OR by any display-index change.
+# No recomputation — just picks the right columns and rebuilds the figures.
+
+@app.callback(
+    [Output("3d-plot", "figure"),
+     Output("x-plot",  "figure"),
+     Output("y-plot",  "figure"),
+     Output("z-plot",  "figure")],
+    [Input('traj-store', 'data'),
+     Input("v1-idx",    "value"),
+     Input("v2-idx",    "value"),
+     Input("v3-idx",    "value"),
+     Input("v1-idx-05", "value"),
+     Input("v2-idx-05", "value"),
+     Input("v3-idx-05", "value")],
+)
+def update_plots(store_data, v1, v2, v3, v1_05, v2_05, v3_05):
+    empty = [go.Figure()] * 4
+    if store_data is None:
+        return empty
+
+    try:
+        model     = store_data['model']
+        true_traj = np.array(store_data['true_traj'])
+        ens_trajs = [np.array(e) for e in store_data['ens_trajs']]
+        time      = store_data['time']
+        N         = store_data['N']
+
+        # Resolve display indices for the current model
+        if model == 'L63':
+            indices = [0, 1, 2]
+            labels  = ['X', 'Y', 'Z']
+
+        else:
+            raw     = [v1, v2, v3] if model == 'L96' else [v1_05, v2_05, v3_05]
+            defaults = [0, 1, 2]
+            indices  = []
+            for i, v in enumerate(raw):
+                try:
+                    val = int(v) if v is not None else defaults[i]
+                except (ValueError, TypeError):
+                    val = defaults[i]
+                indices.append(min(max(0, val), N - 1))
+            labels = [f'x<sub>{idx + 1}</sub>' for idx in indices]
+
+        # 3-D plot
         fig_3d = go.Figure()
         for e in ens_trajs:
             fig_3d.add_trace(go.Scatter3d(
-                x=e[:,indices[0]], y=e[:,indices[1]], z=e[:,indices[2]], 
-                mode='lines', line=dict(color='red', width=1), opacity=0.3, showlegend=False
+                x=e[:, indices[0]], y=e[:, indices[1]], z=e[:, indices[2]],
+                mode='lines', line=dict(color='red', width=1),
+                opacity=0.3, showlegend=False,
             ))
         fig_3d.add_trace(go.Scatter3d(
-            x=true_traj[:,indices[0]], y=true_traj[:,indices[1]], z=true_traj[:,indices[2]], 
-            mode='lines', line=dict(color='darkblue', width=4), name='Truth'
+            x=true_traj[:, indices[0]],
+            y=true_traj[:, indices[1]],
+            z=true_traj[:, indices[2]],
+            mode='lines', line=dict(color='darkblue', width=4), name='Truth',
         ))
-        # Add start point marker
         fig_3d.add_trace(go.Scatter3d(
-            x=[true_traj[0, indices[0]]], 
-            y=[true_traj[0, indices[1]]], 
+            x=[true_traj[0, indices[0]]],
+            y=[true_traj[0, indices[1]]],
             z=[true_traj[0, indices[2]]],
             mode='markers',
             marker=dict(size=8, color='limegreen', symbol='circle'),
-            name='Start Location'
+            name='Start Location',
         ))
         fig_3d.update_layout(
             scene=dict(
-                xaxis_title=labels[0], 
-                yaxis_title=labels[1], 
-                zaxis_title=labels[2]
-            ), 
-            margin=dict(l=0, r=0, b=0, t=0)
+                xaxis_title=labels[0],
+                yaxis_title=labels[1],
+                zaxis_title=labels[2],
+            ),
+            margin=dict(l=0, r=0, b=0, t=0),
         )
 
-        def mk1d(idx_in_data, lbl):
+        # 1-D time series
+        def mk1d(col_idx, lbl):
             f = go.Figure()
-            for e in ens_trajs: 
-                f.add_trace(go.Scatter(x=time, y=e[:,idx_in_data], mode='lines', line=dict(color='red', width=1), opacity=0.3, showlegend=False))
-            f.add_trace(go.Scatter(x=time, y=true_traj[:,idx_in_data], mode='lines', line=dict(color='darkblue', width=2), name='Truth'))
-            f.update_layout(xaxis_title="Time", yaxis_title=lbl, margin=dict(l=20, r=20, b=20, t=20), showlegend=False)
+            for e in ens_trajs:
+                f.add_trace(go.Scatter(
+                    x=time, y=e[:, col_idx],
+                    mode='lines', line=dict(color='red', width=1),
+                    opacity=0.3, showlegend=False,
+                ))
+            f.add_trace(go.Scatter(
+                x=time, y=true_traj[:, col_idx],
+                mode='lines', line=dict(color='darkblue', width=2), name='Truth',
+            ))
+            f.update_layout(
+                xaxis_title="Time", yaxis_title=lbl,
+                margin=dict(l=20, r=20, b=20, t=20), showlegend=False,
+            )
             return f
 
-        stats = f"Simulation Complete. Final State ({labels[0]}, {labels[1]}, {labels[2]}): {true_traj[-1, indices]}"
-        return fig_3d, mk1d(indices[0], labels[0]), mk1d(indices[1], labels[1]), mk1d(indices[2], labels[2]), stats
+        return (fig_3d,
+                mk1d(indices[0], labels[0]),
+                mk1d(indices[1], labels[1]),
+                mk1d(indices[2], labels[2]))
+
     except Exception as e:
-        print(f"Error in Callback: {str(e)}", file=sys.stderr)
+        print(f"Error in update_plots: {e}", file=sys.stderr)
         traceback.print_exc()
-        return [go.Figure()]*4 + [f"Error: {str(e)}"]
+        return empty
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5007, host='0.0.0.0')

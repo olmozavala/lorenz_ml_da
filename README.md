@@ -1,29 +1,51 @@
 # Lorenz ML-DA
 
-Machine Learning surrogate models for Lorenz dynamical systems (L63 & L96), with interactive dashboards for simulation, training, evaluation, and model comparison.
+Machine Learning surrogate models for Lorenz dynamical systems (L63, L96, and L05), with interactive dashboards for simulation, training, evaluation, and model comparison.
 
 ## Overview
 
-This project trains neural networks to emulate the dynamics of chaotic Lorenz systems. The trained ML models can then be used as surrogate models in **Data Assimilation (DA)** workflows, replacing expensive numerical integrations with fast neural network inference.
+This project trains neural networks to emulate the dynamics of chaotic Lorenz systems. The trained ML models are intended to serve as **fast surrogate replacements for the numerical model** inside **ensemble Data Assimilation (DA)** workflows — calling the neural network instead of the ODE integrator at each forecast step.
+
+Numerical integration is provided by **[DAPyr](https://github.com/Dayton-DA/DAPyr)** (RK45 with LSODA fallback via `numbalsoda`/`sundials`), replacing the previous Forward Euler implementation.
 
 ### Supported Lorenz Systems
 
-- **Lorenz 63** — The classic 3-variable chaotic attractor:
+- **Lorenz 63** — Classic 3-variable chaotic attractor (N=3):
 
 $$\frac{dx}{dt} = \sigma(y - x), \quad \frac{dy}{dt} = x(\rho - z) - y, \quad \frac{dz}{dt} = xy - \beta z$$
 
-- **Lorenz 96** — The N-dimensional weather-like model:
+- **Lorenz 96** — N-dimensional weather-like model (**N=40, fixed**):
 
 $$\frac{dx_i}{dt} = (x_{i+1} - x_{i-2})x_{i-1} - x_i + F$$
 
+- **Lorenz 2005 Model III** — Two-scale model (**N=480, fixed**). The full state $Z_n$ is split into large-scale $X_n$ (smoothed with half-width $I$) and small-scale residual $Y_n = Z_n - X_n$:
+
+$$\frac{dZ_n}{dt} = [X,X]_{K,n} + b^2[Y,Y]_n + c\,[Y,X]_n - X_n - bY_n + F$$
+
+> **Note:** The state dimensions for L96 (N=40) and L05 (N=480) are fixed by DAPyr's compiled Numba kernels and cannot be changed without modifying DAPyr.
+
+---
+
 ## Features
 
-- 🌀 **Interactive Lorenz Simulator** — Explore L63/L96 dynamics with adjustable parameters, ensemble perturbations, and 3D visualization
-- 🔥 **ML Training Dashboard** — Train Dense, Residual-Dense, or LSTM models with real-time learning curves and trajectory visualization
-- 🧪 **Model Evaluation** — Compare ML predictions against truth with ensemble forecasts from perturbed initial conditions
-- 📊 **Batch Model Comparison** — Systematic evaluation across architectures and history step configurations
+- 🌀 **Interactive Lorenz Simulator** — Explore L63/L96/L05 dynamics with adjustable physics parameters, ensemble perturbations, and 3D visualization. Display variables can be changed live without recomputing the trajectory.
+- 🔥 **ML Training Dashboard** — Train Dense, Residual-Dense, or LSTM models with real-time learning curves and trajectory visualization.
+- 🧪 **Model Evaluation** — Compare ML ensemble predictions against truth ensemble with shared initial history windows.
+- 📊 **Batch Model Comparison** — Systematic evaluation across architectures and history-step configurations.
+
+---
 
 ## Quick Start
+
+### Prerequisites
+
+This project requires **DAPyr** to be installed locally (it is not on PyPI):
+
+```bash
+pip install <path-to-DAPyr>
+```
+
+DAPyr in turn requires `numba` and `numbalsoda`. Both are included in `requirements.txt`.
 
 ### Installation
 
@@ -32,12 +54,14 @@ $$\frac{dx_i}{dt} = (x_{i+1} - x_{i-2})x_{i-1} - x_i + F$$
 git clone https://github.com/olmozavala/lorenz_ml_da.git
 cd lorenz_ml_da
 
-# Install dependencies
+# Install all dependencies (activate your environment first)
 pip install -r requirements.txt
-
-# Additional dependencies for dashboards
-pip install dash dash-bootstrap-components plotly scikit-learn pyyaml tensorboard
 ```
+
+> **GPU / CUDA**: `torch` is listed without a CUDA suffix in `requirements.txt`. To use GPU acceleration, install the appropriate CUDA wheel separately:
+> ```bash
+> pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu126
+> ```
 
 ### Running the Dashboards
 
@@ -45,17 +69,15 @@ pip install dash dash-bootstrap-components plotly scikit-learn pyyaml tensorboar
 ```bash
 python 0_LorenzDashboard.py
 ```
-Explore Lorenz dynamics interactively — adjust parameters (σ, β, ρ for L63; F, N for L96), run ensembles with perturbed initial conditions, and visualize trajectories in 3D.
+Explore Lorenz dynamics interactively. Adjust physics parameters (σ, β, ρ for L63; F for L96/L05; K for L05), run ensembles with perturbed initial conditions, and visualize trajectories in 3D. Change which state variables are shown in the 1D/3D plots without re-running the simulation.
 
 **ML Training Studio** (port 8050):
 ```bash
 python 1_SingleMLTraining.py
 ```
-Train ML models through the browser. Configure architecture, data generation, and training hyperparameters in the sidebar. Monitor learning curves in real-time, then evaluate trained models against truth in the Evaluation tab.
+Train ML surrogate models through the browser. Configure architecture, data generation, and training hyperparameters in the sidebar. Monitor learning curves in real-time. Evaluate trained models against truth ensembles in the Evaluation tab.
 
 ### Command-Line Training
-
-For batch training without the dashboard:
 
 ```bash
 # Edit config.yml to set parameters, then:
@@ -68,59 +90,68 @@ python Main_ML.py
 python ML_Model_Comparison.py
 ```
 
+---
+
 ## Project Structure
 
 ```
 lorenz_ml_da/
-├── 0_LorenzDashboard.py      # Interactive Lorenz simulator dashboard
-├── 1_SingleMLTraining.py      # ML training + evaluation dashboard
-├── Main_ML.py                 # Command-line training script
-├── ML_Model_Comparison.py     # Batch model comparison & plotting
-├── MachineLearning.py         # Neural network architectures (Dense, ResDense, LSTM)
-├── Training.py                # Training loop, early stopping, recursive rollout
-├── config.yml                 # Configuration for command-line training
-├── requirements.txt           # Python dependencies
+├── 0_LorenzDashboard.py      # Interactive Lorenz simulator (L63 / L96 / L05)
+├── 1_SingleMLTraining.py     # ML training + evaluation dashboard
+├── Main_ML.py                # Command-line batch training script
+├── ML_Model_Comparison.py    # Batch model comparison & plotting
+├── MachineLearning.py        # Neural network architectures (Dense, ResDense, LSTM)
+├── Training.py               # Training loop, early stopping, recursive rollout
+├── config.yml                # Configuration for command-line training
+├── requirements.txt          # Python dependencies (pinned to lorenzo env versions)
 ├── lorenz/
-│   └── lorenz_systems.py      # Lorenz 63 & 96 system implementations
+│   └── lorenz_systems.py     # Lorenz 63/96/05 integration via DAPyr (RK45/LSODA)
 ├── datasets/
-│   └── LorenzDataset.py       # PyTorch Dataset for Lorenz trajectory data
-├── models/                    # Saved model checkpoints (.pth) and configs (.yml)
-├── outputs/                   # Training outputs
-├── runs/                      # TensorBoard logs
+│   └── LorenzDataset.py      # PyTorch Dataset for Lorenz trajectory data
+├── models/                   # Saved model checkpoints (.pth) and configs (.yml)
+├── outputs/                  # Batch training outputs and comparison plots
+├── runs/                     # TensorBoard training logs
 └── tests/
-    └── test_lorenz_systems.py # Unit tests for Lorenz systems
+    └── test_lorenz_systems.py # Unit tests for DAPyr-backed trajectory generation
 ```
+
+---
 
 ## Model Architectures
 
 | Architecture | Description |
 |---|---|
-| **DenseNN** | Standard feedforward network mapping flattened history → next state |
-| **ResDenseNN** | Residual variant that predicts the *increment* (Δ) from the last input state |
-| **LSTMNN** | LSTM-based model that processes the history as a temporal sequence |
+| **DenseNN** | Standard feedforward network: flattened history → hidden layers → next state |
+| **ResDenseNN** | Residual variant: predicts the *increment* Δ from the last state (`s_t + Δ`). Generally recommended — easier to optimise and more stable under long autoregressive rollouts. |
+| **LSTMNN** | History is reshaped into `(batch, prev_time_steps, nx)` and processed by an LSTM; the last hidden state is mapped to the next state via a linear layer. |
 
-All models take `prev_time_steps` history states as input (flattened) and predict the next state. The **ResDenseNN** is generally recommended as it learns the dynamics increment rather than the full state, which tends to train faster and generalize better.
+All models take `prev_time_steps` consecutive states as input (flattened to `(batch, prev_time_steps × nx)`) and predict the next state `(batch, nx)`.
+
+---
 
 ## Training Details
 
-- **Data normalization**: All data is StandardScaler-normalized (zero mean, unit variance). The scaler parameters are saved with the model for correct denormalization at inference.
-- **Multi-step rollout**: Training uses a progressive rollout schedule (1→2→3→4→5 steps) with geometric loss weighting (γ=0.9), encouraging the model to remain accurate over longer horizons.
-- **Early stopping**: Patience-based early stopping resets when the rollout depth increases, allowing the model to adapt to each new phase.
+- **Data normalisation**: All data is `StandardScaler`-normalised (zero mean, unit variance). Scaler parameters (`mean_`, `scale_`) are saved with each model checkpoint for correct denormalisation at inference time.
+- **Progressive multi-step rollout**: Training uses an escalating rollout schedule (1 → 2 → 3 → 4 → 5 steps) with geometric loss weighting (γ = 0.9). This encourages the model to remain accurate over longer horizons, which is critical for use inside a DA cycle.
+- **Early stopping**: Patience-based, resets when the rollout depth increases so each phase gets a fair number of epochs.
+- **Best model**: A raw `state_dict` is saved as `{model_name}_best_model.pth` whenever validation loss improves. The companion `.yml` config file holds architecture and normalisation metadata.
+
+---
 
 ## Configuration
 
-The `config.yml` file controls batch training via `Main_ML.py`:
+`config.yml` controls batch training via `Main_ML.py`:
 
 ```yaml
 dataset:
-  system_type: '63'        # '63' or '96'
+  system_type: '63'        # '63', '96', or '05'
   dt: 0.01                 # Integration time step
-  ns: 5000                 # Number of integration steps per location
+  ns: 5000                 # Integration steps per start location
   save_dt: 10              # Subsampling factor (effective Δt = dt × save_dt)
-  prev_time_steps: 4       # Number of history steps as model input
+  prev_time_steps: 4       # History window fed to the model
 
 model:
-  type: 'ResDenseNN'       # 'DenseNN' or 'ResDenseNN'
+  type: 'ResDenseNN'       # 'DenseNN', 'ResDenseNN', or 'LSTMNN'
   hidden_layers: [64, 64, 32, 16]
 
 training:
@@ -130,6 +161,16 @@ training:
   n_trials: 3
   early_stopping_patience: 10
 ```
+
+---
+
+## Research Context
+
+The long-term goal of this project is to use the trained ML surrogates **inside an ensemble DA cycle** (e.g., EnSRF or Local Particle Filter as implemented in DAPyr), replacing the numerical Lorenz model with a neural network forward operator at each forecast step. The progressive rollout training strategy directly targets this use case by teaching the model to produce stable trajectories under repeated autoregressive application.
+
+The three systems span a standard ladder of difficulty in the DA community: L63 (toy, easy to visualise) → L96 (canonical benchmark) → L05 Model III (multiscale, closer to realistic atmospheric dynamics).
+
+---
 
 ## License
 

@@ -7,32 +7,31 @@ Technical reference for contributors and maintainers of the Lorenz ML-DA codebas
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Entry Points                              │
-│  0_LorenzDashboard.py   1_SingleMLTraining.py   Main_ML.py  │
-│  (Lorenz Explorer)      (Train + Eval GUI)      (CLI Train) │
-└──────────┬───────────────────┬───────────────────┬──────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         Entry Points                              │
+│  0_LorenzDashboard.py   1_SingleMLTraining.py   Main_ML.py       │
+│  (Lorenz Explorer)      (Train + Eval GUI)      (CLI Train)       │
+└──────────┬───────────────────┬───────────────────┬───────────────┘
            │                   │                   │
            ▼                   ▼                   ▼
 ┌──────────────────┐  ┌────────────────┐  ┌───────────────────┐
 │  lorenz/         │  │ MachineLearning│  │ Training.py       │
 │  lorenz_systems  │  │ .py            │  │                   │
-│  • L63 dynamics  │  │ • DenseNN      │  │ • train_model()   │
-│  • L96 dynamics  │  │ • ResDenseNN   │  │ • EarlyStopping   │
-│  • trajectory    │  │ • LSTMNN       │  │ • recursive_      │
-│    generation    │  │ • save/load    │  │   rollout()       │
-└──────────────────┘  └────────────────┘  └───────────────────┘
-                              │
-                              ▼
-                      ┌───────────────┐
-                      │ datasets/     │
-                      │ LorenzDataset │
-                      │ .py           │
-                      │ • PyTorch     │
-                      │   Dataset     │
-                      │ • Scaler      │
-                      │ • Multi-loc   │
-                      └───────────────┘
+│  • DAPyr RK45/   │  │ • DenseNN      │  │ • train_model()   │
+│    LSODA backend │  │ • ResDenseNN   │  │ • EarlyStopping   │
+│  • L63 / L96 /   │  │ • LSTMNN       │  │ • recursive_      │
+│    L05 Model III │  │ • save/load    │  │   rollout()       │
+│  • funcptr cache │  └────────────────┘  └───────────────────┘
+└──────────────────┘           │
+           │                   ▼
+           │           ┌───────────────┐
+           └──────────▶│ datasets/     │
+                       │ LorenzDataset │
+                       │ • PyTorch     │
+                       │   Dataset     │
+                       │ • StandardScaler
+                       │ • Multi-loc   │
+                       └───────────────┘
 ```
 
 ---
@@ -41,69 +40,134 @@ Technical reference for contributors and maintainers of the Lorenz ML-DA codebas
 
 ### `lorenz/lorenz_systems.py`
 
-Core physics engine. Contains `LorenzSystems` with static methods for L63 and L96 dynamics.
+Integration engine for all Lorenz systems, backed by **DAPyr** (RK45 via `numbalsoda`/ARKODE, with LSODA fallback).
+
+The previous Forward Euler loop (`x += dt * f(x)`) and all Python RHS methods (`lorenz63`, `lorenz96`, `lorenz05`, `get_system`) have been removed. Integration now delegates entirely to DAPyr's compiled Numba kernels.
+
+#### Module-level `_rhs_cache`
+
+```python
+_rhs_cache: dict  # (system_type, frozenset(params)) → (rhs_obj, funcptr_address)
+```
+
+DAPyr's `make_rhs_*` functions trigger **Numba JIT compilation** on first call (a few seconds). The cache ensures each unique set of physics parameters is compiled exactly once. Holding a reference to `rhs_obj` keeps the C function pointer (`rhs.address`) alive and valid.
+
+#### `LorenzSystems` class
 
 | Method | Description |
 |---|---|
-| `lorenz63(x, sigma, beta, rho)` | Returns `dx/dt` for the Lorenz-63 system |
-| `lorenz96(x, F)` | Returns `dx/dt` for the Lorenz-96 system (N-dimensional) |
-| `get_system(system_type)` | Factory method returning the appropriate dynamics function |
-| `generate_trajectory(system_type, x0, dt, n_steps, **params)` | Forward Euler integration producing `(n_steps, nx)` array |
+| `_get_funcptr(system_type, **params)` | Returns a cached C function pointer for the DAPyr ODE integrator. Compiles on first call. |
+| `generate_trajectory(system_type, x0, dt, n_steps, **params)` | Integrates the system for `n_steps` using `dapyr_model(x, dt, 1, funcptr)` at each step. Returns `(n_steps, nx)` array. |
 
-**Integration method**: Forward Euler (`x += dt * f(x)`). Simple but sufficient for the Lorenz attractor at small `dt`.
+#### Parameter name mapping (public API → DAPyr)
 
-**Key parameter**: `**params` are passed directly to the dynamics function. For L63: `sigma`, `beta`, `rho`. For L96: `F`. The caller must ensure only relevant params are passed (e.g., don't pass `N` to L63).
+| System | Public param | DAPyr key |
+|---|---|---|
+| L63 | `sigma` | `s` |
+| L63 | `rho` | `r` |
+| L63 | `beta` | `b` |
+| L96 | `F` | `F` |
+| L05 | `F` | `l05_F`, `l05_Fe` |
+| L05 | `K` | `l05_K` |
+
+#### Fixed state dimensions (DAPyr constraint)
+
+| System | N | Enforced by |
+|---|---|---|
+| L63 | 3 (from `x0`) | — |
+| L96 | **40** | `make_rhs_l96` hardcodes `Nx=40` |
+| L05 | **480** | `make_rhs_l05` hardcodes `Nx=480` |
+
+A `ValueError` is raised in `generate_trajectory` if `len(x0)` does not match.
+
+#### DAPyr integrator details
+
+`dapyr_model(x, dt, 1, funcptr)` calls `numbalsoda.solve_ivp` (ARKODE RK45, `rtol=1e-9`, `atol=1e-30`) and falls back to `lsoda` for stiff regions. It returns `(final_state, error_flag)`. The function is called once per step; a `RuntimeError` is raised if `error_flag != 0`.
+
+> **Note on L05 model variant**: DAPyr implements **Model III** from Lorenz (2005) — a two-scale model with large-scale (`X`) and small-scale (`Y = Z − X`) components, coupled via parameters `I` (smoothing half-width), `b` (amplitude ratio), and `c` (coupling). When `I=1` (default `l05_I=1`), it degenerates to single-scale behaviour (Model II). This differs from the original repo's simplified Model II implementation.
 
 ---
 
 ### `datasets/LorenzDataset.py`
 
-PyTorch `Dataset` that generates and normalizes Lorenz trajectory data.
+PyTorch `Dataset` that generates and normalises Lorenz trajectory data.
 
 **Constructor flow**:
 1. For each of `num_start_locations` random initial conditions:
-   - Generate a long trajectory using `LorenzSystems.generate_trajectory()`
+   - Generate a long trajectory via `LorenzSystems.generate_trajectory()` (DAPyr-backed)
    - Add Gaussian noise (`std` parameter)
    - Subsample at interval `save_Dt` to create input/target pairs offset by one step
 2. Stack all locations' data into `self.data` and `self.target`
-3. Fit a `StandardScaler` on `self.data`
-4. Transform both `data` and `target` to zero-mean, unit-variance
+3. Fit a `StandardScaler` on `self.data`, transform both arrays to zero-mean / unit-variance
+
+**State dimension for L96**: `LorenzDataset` reads `system_params.get('N', 40)` to size the random initial condition vector. Since DAPyr fixes L96 at N=40, callers must pass (or rely on the default of) `N=40`.
 
 **Important attributes**:
-- `data_list` — Raw (pre-normalization) subsampled trajectories per location. Used for visualization.
-- `scaler` — The fitted `StandardScaler`. Its `mean_` and `scale_` must be saved with the model.
-- `prev_time_steps` — Number of consecutive states forming a single input sample.
+- `data_list` — Raw (pre-normalisation) subsampled trajectories per location. Used for 3D preview in the training dashboard.
+- `scaler` — Fitted `StandardScaler`. Its `mean_` and `scale_` are saved with every model checkpoint.
+- `prev_time_steps` — Number of consecutive states forming one input sample.
 
 **`__getitem__` output**:
-- `input_seq`: Flattened tensor of shape `(prev_time_steps * nx,)` — the history window
-- `targets`: Tensor of shape `(max_future=10, nx)` — the next 10 states for multi-step rollout training
+- `input_seq`: flattened tensor of shape `(prev_time_steps * nx,)` — the history window
+- `targets`: tensor of shape `(10, nx)` — the next 10 states for multi-step rollout training
 
 ---
 
 ### `MachineLearning.py`
 
-Neural network architectures and model I/O utilities.
+Neural network architectures and model I/O utilities. Dead code removed: the old commented `DenseNN` block, the legacy `ml_step()` function (which assumed ensemble-shaped input), and the `realLoad()` function (hardcoded local path).
 
 #### `DenseNN(nn.Module)`
-Standard feedforward network. Input: flattened history `(batch, prev_time_steps * nx)` → Output: next state `(batch, nx)`.
+
+Standard feedforward MLP.
+
+```
+Input: (batch, input_size * prev_time_steps)  →  hidden layers  →  Output: (batch, output_size)
+```
 
 #### `ResDenseNN(nn.Module)`
-**Residual variant** — the network predicts the **increment** (delta) from the last input state:
+
+Residual feedforward network — predicts the **increment** Δ, not the full next state:
+
 ```python
 def forward(self, x):
-    current_state = x[:, -self.input_size:]  # last state in history
+    current_state = x[:, -self.input_size:]  # most recent state in flattened history
     delta = self.network(x)
-    return current_state + delta
+    return current_state + delta             # s_{t+1} = s_t + Δ
 ```
-This is generally more effective because the model only needs to learn the small correction rather than the full state magnitude.
+
+Preferred architecture: easier to optimise (network learns small corrections), more stable under long autoregressive rollouts.
 
 #### `LSTMNN(nn.Module)`
-Reshapes the flattened input into `(batch, prev_time_steps, nx)`, processes through LSTM layers, and maps the final hidden state to the output via a linear layer.
+
+```python
+def forward(self, x):
+    x = x.view(-1, self.prev_time_steps, self.input_size)  # unflatten history
+    out, _ = self.lstm(x)
+    return self.fc(out[:, -1, :])  # map last hidden state → next state
+```
+
+`hidden_size` is a single integer (set to `hidden_layers[0]` when instantiating from the dashboard or CLI). `num_layers` defaults to 1.
 
 #### Model I/O
-- **`save_model()`** saves a checkpoint dict: `{model_state_dict, train_mean, train_std, architecture}`
-- **`load_model()`** reconstructs the model from a checkpoint
-- **`architecture` dict** contains: `model_type`, `input_size`, `prev_time_steps`, `hidden_layers`, `system`, `N`
+
+| Function | Description |
+|---|---|
+| `save_model(model, path, mean, std, architecture)` | Saves full checkpoint: `{model_state_dict, train_mean, train_std, architecture}` |
+| `load_model(path, model_class, ...)` | Reconstructs model from a full checkpoint |
+| `denormalize(predictions, mean, std)` | `pred * std + mean` |
+
+**`architecture` dict** (stored in checkpoint and `.yml`):
+```python
+{
+    'model_type':      str,       # 'Dense', 'ResDense', or 'LSTM'
+    'input_size':      int,       # state dimension (3 for L63, 40 for L96)
+    'prev_time_steps': int,       # history window size
+    'hidden_layers':   list[int], # e.g. [64, 64, 32]
+    'system':          str,       # '63', '96', or '05'
+    'N':               int,       # state dimension (same as input_size; legacy field)
+}
+```
 
 ---
 
@@ -112,33 +176,37 @@ Reshapes the flattened input into `(batch, prev_time_steps, nx)`, processes thro
 Training loop with progressive multi-step rollout.
 
 #### `recursive_rollout(model, initial_input, num_steps, prev_time_steps, device)`
+
 Autoregressively applies the model for `num_steps`:
-1. Takes the current history window `[s_{t-n}, ..., s_{t-1}]`
-2. Predicts `s_t`
-3. Shifts the window: `[s_{t-n+1}, ..., s_{t-1}, s_t]`
-4. Repeats
+1. Current history window `[s_{t-n}, …, s_{t-1}]` → model → `s_t`
+2. Shift window: `[s_{t-n+1}, …, s_{t-1}, s_t]`
+3. Repeat
 
 Returns `(batch, num_steps, nx)` tensor of all predictions.
 
 #### `train_model(...)`
-Main training loop with these key features:
 
 **Progressive rollout schedule**:
+
 | Epochs | Rollout Steps |
 |---|---|
-| 0–19 | 1 (single-step) |
-| 20–59 | 2 |
-| 60–119 | 3 |
-| 120–199 | 4 |
+| 0 – 19 | 1 (single-step) |
+| 20 – 59 | 2 |
+| 60 – 119 | 3 |
+| 120 – 199 | 4 |
 | 200+ | 5 |
 
-**Loss weighting**: Geometric decay `γ^s` (γ=0.9) across rollout steps — earlier predictions are weighted more heavily.
+**Loss weighting**: geometric decay `γ^s` (γ = 0.9) — earlier predictions weighted more heavily.
 
-**Early stopping**: Resets when rollout depth increases. If patience is exhausted at a given depth, training advances to the next rollout phase.
+**Early stopping**: Patience-based; counter resets when rollout depth increases. Patience is read from `EarlyStopping.patience`.
 
-**Best model saving**: `model.state_dict()` is saved as `{model_name}_best_model.pth` whenever validation loss improves. **Note**: This is a raw state_dict (no architecture metadata).
+**Best model saving**: `model.state_dict()` saved as `{model_name}_best_model.pth` whenever validation loss improves. This is a raw `state_dict` with no metadata — the companion `.yml` config file holds architecture and normalisation info.
 
-**Validation**: Always evaluated at 5-step rollout regardless of current training rollout depth, providing a consistent comparison metric.
+**Validation**: Always at 5-step rollout regardless of training phase, giving a consistent metric across the whole run.
+
+**Stop signal**: `progress_callback` return value is checked; returning `True` breaks the loop (used by the dashboard's Stop button).
+
+> ⚠️ **Known bug**: The early-stopping phase-skip logic (`epoch = 19`, `epoch = 59`, etc.) inside a `for … range()` loop is a **silent no-op** in Python — assigning to the loop variable does not affect the iterator. The early-stopping *reset* (counter = 0) still fires correctly at natural epoch boundaries, so training is not broken — just potentially slower than intended when a phase converges early.
 
 ---
 
@@ -146,125 +214,166 @@ Main training loop with these key features:
 
 Dash web application (port 5007) for interactive Lorenz system exploration.
 
-**Features**:
-- Dropdown to select L63 or L96 (toggles relevant parameter inputs)
-- Physics parameter controls (σ, β, ρ for L63; F, N for L96)
-- Adjustable `dt`, `steps`, ensemble size, and perturbation std
-- 3D scatter plot + three 1D time series (x, y, z components)
-- MathJax equation rendering
+**Systems**: L63, L96 (N=40 fixed), L05 Model III (N=480 fixed). N inputs have been removed from the UI; dimensions are hardcoded in `run_simulation`.
 
-**Callbacks**:
-- `toggle_ui(model)` — Shows/hides L63 vs L96 parameter divs
-- `execute_sim(...)` — Generates truth + ensemble trajectories and plots
+**Equation display**: Updated to reflect the correct model variants, including "N=40 (fixed)" for L96 and the full two-scale Model III equation for L05.
+
+**Key design — split callbacks with `dcc.Store`**:
+
+The original single callback computed and rendered everything on each button click, so changing display variable indices required a full recompute. This has been split into two callbacks:
+
+```
+Run button ──→ [run_simulation] ──→ traj-store (serialised trajectories)
+                                           │
+                               ┌───────────┘
+Variable index inputs ────────→ [update_plots] ──→ 3d-plot / x-plot / y-plot / z-plot
+```
+
+- **`run_simulation`** (triggered by Run button only): integrates trajectories, serialises them to `dcc.Store` as JSON (`true_traj`, `ens_trajs`, `time`, `model`, `N`), returns stats text.
+- **`update_plots`** (triggered by `traj-store` update **or** any index input change): reads stored arrays, selects columns by index, rebuilds all four figures. No integration cost.
+
+**Ensemble logic**: one unperturbed truth trajectory + `ens_size` independent trajectories from pertured initial conditions (`x_init + Normal(0, pert)`). This is correct and unchanged.
 
 ---
 
 ### `1_SingleMLTraining.py`
 
-Dash web application (port 8050) for ML training and evaluation. Two tabs:
+Dash web application (port 8050) for ML training and evaluation.
 
-#### Training Tab
-- Sidebar: Architecture config, data generation params, training hyperparams
-- Start/Stop buttons with threaded training (doesn't block the UI)
-- Real-time learning curves (train/val loss on log scale with `10^x` formatting)
-- Sample trajectory visualization (3D plot of one training trajectory)
-- Model configuration card showing selected model's details
+**Changes from original**:
+- Removed `l96-n-div` / `l96-n` UI element and `toggle_n_l96` callback — N=40 is hardcoded
+- Dropdown label updated to "Lorenz 96 (N=40)" to communicate the constraint
+- `sys_params['N'] = 40` hardcoded in `training_thread_func` (used by `LorenzDataset` to size the L96 initial condition)
+- `input_size = 40` hardcoded for L96 in model construction
+- `eval_params = {'F': 8.0}` for L96 in the evaluation callback (previously passed `{'N': meta['N']}`, which `_get_funcptr` ignores)
+- L96 evaluation initial condition: `np.ones(40) * 8.0 + small_noise` — starts near the L96 forcing equilibrium rather than `Normal(0, 1)` which is unphysical
 
-**Training thread flow**:
-1. `start_tra()` callback resets `training_state`, starts `threading.Thread(target=training_thread)`
-2. `training_thread()` creates dataset, model, optimizer, then calls `train_model()` with a `progress_callback`
-3. `progress_callback` appends loss values to `training_state['history']` each epoch
-4. `update_metrics()` callback fires every 1s via `dcc.Interval`, reads `training_state`, updates plots
+#### Training thread flow
 
-**Key global**: `training_state` dict holds all shared state between the training thread and Dash callbacks.
+```
+start_tra() callback
+  → resets training_state
+  → starts threading.Thread(target=training_thread_func)
 
-#### Evaluation Tab
-- Model dropdown (auto-refreshes, shows both regular and `_best_model.pth` files)
-- Forecast steps, ensemble size, IC noise (σ) controls
-- Clicking "Run Eval" generates:
-  1. **Truth ensemble**: `ens_size` trajectories from the true Lorenz system with perturbed ICs
-  2. **ML ensemble**: Uses the first `prev_steps` of each truth trajectory as shared history, then rolls out the ML model
-- Both ensembles share the same initial `prev_steps` states — they diverge only after the ML takes over
-- 3D plot + three 1D component plots
+training_thread_func(config)
+  → LorenzDataset(...)                   # generates + normalises data
+  → random_split(train / val / test)
+  → builds model (DenseNN / ResDenseNN / LSTMNN)
+  → saves .yml config immediately        # available even if training stops early
+  → train_model(..., progress_callback)
+  → save_model(...)                      # saves full checkpoint
 
-**Model loading logic** (handles two checkpoint formats):
-- **Full checkpoint** (`model_state_dict` key present): architecture, mean, std all in the `.pth`
-- **Best model** (raw state_dict): Architecture and mean/std read from the companion `.yml` file
+progress_callback(epoch, train_loss, val_loss, rollout)
+  → appends to training_state['history']
+  → returns True if stop_requested      # breaks train_model loop
+```
+
+`update_metrics()` fires every 1 s via `dcc.Interval`, reads `training_state`, updates loss graph and status text.
+
+#### Evaluation flow
+
+```
+Load .pth checkpoint
+  → if 'model_state_dict' in cp: full checkpoint (has arch + mean/std)
+  → else: raw state_dict (_best_model.pth) → read arch + mean/std from .yml
+
+Reconstruct model → model.eval()
+
+Generate truth ensemble (ens_size trajectories, perturbed ICs, full Lorenz)
+Generate ML ensemble:
+  → share first prev_steps states with corresponding truth trajectory
+  → normalize → recursive_rollout(model, …) → denormalize
+  → prepend shared history → full ML trajectory
+
+Plot truth (blue) vs ML (red) — 3D + 3 × 1D
+```
 
 ---
 
 ### `Main_ML.py`
 
-Command-line training script. Reads `config.yml`, creates dataset, trains for `n_trials`, saves models to `outputs/`.
+Command-line batch training. Reads `config.yml`, creates `LorenzDataset`, runs `n_trials` independent training runs, saves full checkpoints to `outputs/`.
 
 ---
 
 ### `ML_Model_Comparison.py`
 
-Batch evaluation and visualization script. Iterates over `prev_time_steps` ranges, loads trained models, evaluates at multiple lead times, and generates comparison plots (line plots + 3D trajectories).
+Batch evaluation and visualisation. Iterates over trained models in `outputs/`, groups by architecture and `prev_time_steps`, evaluates at lead times [1, 4, 8, 16] steps, and generates RMSE comparison plots and 3D trajectory comparisons.
 
 ---
 
 ## Data Flow
 
 ### Training Pipeline
+
 ```
-Random ICs → LorenzSystems.generate_trajectory() → raw trajectory
-  → add noise → subsample (save_Dt) → LorenzDataset
-    → StandardScaler.fit_transform() → normalized (data, target) pairs
-      → DataLoader → train_model() with recursive_rollout()
-        → save checkpoint (.pth) + config (.yml)
+Random ICs
+  → LorenzSystems.generate_trajectory()  [DAPyr RK45/LSODA]
+  → add noise → subsample (save_Dt)
+  → LorenzDataset: StandardScaler.fit_transform()
+  → DataLoader (train / val / test split)
+  → train_model() with recursive_rollout()
+     • progressive rollout schedule (1→5 steps)
+     • geometric loss weighting (γ=0.9)
+     • early stopping with rollout-phase resets
+  → save_model() → .pth (full checkpoint) + .yml (config + scaler stats)
 ```
 
 ### Evaluation Pipeline
+
 ```
-Load checkpoint (.pth) + config (.yml)
-  → Reconstruct model architecture from metadata
-  → Generate truth ensemble (perturbed ICs through true Lorenz)
-  → Extract first prev_steps from truth as shared ML history
-  → Normalize history → recursive_rollout(model) → denormalize predictions
-  → Plot truth vs ML ensemble (transparent blue vs red)
+Load .pth + .yml
+  → reconstruct model from architecture metadata
+  → generate truth ensemble (Lorenz, perturbed ICs)
+  → extract first prev_steps as shared ML initial history
+  → (history - mean) / std → recursive_rollout(model) → * std + mean
+  → prepend shared history → full ML trajectory
+  → plot truth vs ML ensemble
 ```
 
-### Normalization
+### Normalisation
+
 ```
-raw_state → (raw_state - train_mean) / train_std → normalized_input
-                                                        ↓
-                                                   model(normalized_input)
-                                                        ↓
-                                                   normalized_output
-                                                        ↓
-normalized_output * train_std + train_mean → predicted_raw_state
+raw_state  →  (raw_state - train_mean) / train_std  →  model input (normalised)
+                                                              ↓
+                                                         model forward
+                                                              ↓
+normalised output  →  output * train_std + train_mean  →  predicted raw state
 ```
+
+`train_mean` and `train_std` come from `dataset.scaler.mean_` and `dataset.scaler.scale_` and are stored in both the `.pth` checkpoint and the `.yml` config.
 
 ---
 
 ## File Formats
 
 ### Model Checkpoint (`.pth`)
-**Full checkpoint** (saved by `save_model()`):
+
+**Full checkpoint** (written by `save_model()`):
 ```python
 {
     'model_state_dict': OrderedDict,   # PyTorch weights
-    'train_mean': np.ndarray,          # Scaler mean (nx,)
-    'train_std': np.ndarray,           # Scaler std (nx,)
+    'train_mean':       np.ndarray,    # scaler mean  (nx,)
+    'train_std':        np.ndarray,    # scaler std   (nx,)
     'architecture': {
-        'model_type': str,             # 'Dense', 'ResDense', or 'LSTM'
-        'input_size': int,             # State dimension (3 for L63)
-        'prev_time_steps': int,        # History window size
-        'hidden_layers': list[int],    # e.g. [64, 64, 32]
-        'system': str,                 # '63' or '96'
-        'N': int                       # L96 dimension (40 default)
+        'model_type':      str,        # 'Dense', 'ResDense', or 'LSTM'
+        'input_size':      int,        # state dimension (3 for L63, 40 for L96)
+        'prev_time_steps': int,
+        'hidden_layers':   list[int],
+        'system':          str,        # '63', '96', or '05'
+        'N':               int,        # same as input_size (legacy field)
     }
 }
 ```
 
-**Best model** (saved by `Training.py` during training):
+**Best model** (written by `Training.py` during training):
 ```python
-OrderedDict  # Raw state_dict only, no metadata
+OrderedDict  # raw state_dict only — no metadata
+             # architecture + mean/std must be read from the companion .yml
 ```
 
 ### Model Config (`.yml`)
+
 Saved at training start (available even if training is stopped early):
 ```yaml
 model_type: ResDense
@@ -272,24 +381,64 @@ system_type: '63'
 dt: 0.001
 save_dt: 10
 prev_steps: 3
-hidden_layers: 64,64,32
+hidden_layers: '64,64,32'
 batch_size: 2048
 patience: 20
 loss_func: MSE
-architecture:           # Same dict as in checkpoint
+split_train: 70
+split_val: 20
+split_test: 10
+architecture:
   model_type: ResDense
   input_size: 3
-  # ...
-train_mean: [...]       # Scaler mean as list
-train_std: [...]        # Scaler std as list
+  prev_time_steps: 3
+  hidden_layers: [64, 64, 32]
+  system: '63'
+  N: 3
+train_mean: [0.123, ...]    # list, length nx
+train_std:  [4.567, ...]    # list, length nx
 ```
+
+---
+
+## Dependencies
+
+All dependencies are pinned in `requirements.txt` to match the `lorenzo` conda environment:
+
+| Package | Version | Role |
+|---|---|---|
+| `numpy` | 2.3.5 | Array operations throughout |
+| `torch` | 2.10.0 | Neural networks, DataLoader |
+| `tensorboard` | — | TensorBoard logging in `Training.py` |
+| `scikit-learn` | 1.8.0 | `StandardScaler` in `LorenzDataset` |
+| `tqdm` | 4.67.3 | Progress bars |
+| `PyYAML` | 6.0.3 | Config serialisation |
+| `numba` | 0.64.0 | JIT compilation of Lorenz RHS (DAPyr) |
+| `numbalsoda` | 0.3.4 | RK45 / LSODA ODE solver wrappers (DAPyr) |
+| `DAPyr` | 1.0.0 | Lorenz model kernels + DA methods |
+| `matplotlib` | — | Plots in `ML_Model_Comparison.py` |
+| `dash` | 4.0.0 | Web dashboards |
+| `dash-bootstrap-components` | 2.0.4 | Dashboard styling |
+| `plotly` | 6.6.0 | Interactive figures |
+| `pytest` | — | Test suite |
+
+> **DAPyr is not on PyPI** — install from local source: `pip install <path-to-DAPyr>`
 
 ---
 
 ## Testing
 
 ```bash
+conda activate lorenzo
 pytest tests/
 ```
 
-Currently contains `test_lorenz_systems.py` with unit tests for the L63 and L96 trajectory generation.
+`tests/test_lorenz_systems.py` covers the DAPyr-backed integration layer:
+
+| Test | What it checks |
+|---|---|
+| `test_generate_trajectory_l63` | L63 trajectory shape `(n_steps, 3)` and correct initial condition |
+| `test_generate_trajectory_invalid_system` | `ValueError` raised for unknown system type |
+| `test_generate_trajectory_l96_wrong_dim` | `ValueError` raised when `len(x0) != 40` for L96 |
+
+> Tests require the `lorenzo` conda environment (for the DAPyr import). Running in a plain environment without DAPyr will fail at import time.

@@ -1,93 +1,106 @@
 import numpy as np
+from DAPyr.MODELS import make_rhs_l63, make_rhs_l96, make_rhs_l05, model as dapyr_model
+
+# Module-level cache: (system_type, frozenset_of_params) -> (rhs_obj, funcptr_address)
+# Keeping the rhs object alive prevents the cfunc from being garbage-collected,
+# which would invalidate the funcptr address.
+_rhs_cache = {}
+
 
 class LorenzSystems:
     """
-    Class to generate multiple types of Lorenz forms (63, 96, etc.).
+    Class to generate trajectories for Lorenz systems (63, 96, 05).
+
+    Integration uses DAPyr's RK45/LSODA solver (via numbalsoda).
+
+    State-dimension constraints imposed by DAPyr's compiled kernels:
+        L96: N must be 40
+        L05: N must be 480
     """
-    
-    @staticmethod
-    def lorenz63(x, sigma=10.0, beta=8/3, rho=28.0):
-        """
-        Lorenz 63 system.
-        """
-        dx = sigma * (x[1] - x[0])
-        dy = x[0] * (rho - x[2]) - x[1]
-        dz = x[0] * x[1] - beta * x[2]
-        return np.array([dx, dy, dz])
 
     @staticmethod
-    def lorenz96(x, F=8.0):
+    def _get_funcptr(system_type, **params):
         """
-        Lorenz 96 system.
-        """
-        N = len(x)
-        dxdt = np.zeros(N)
-        for i in range(N):
-            dxdt[i] = (x[(i + 1) % N] - x[(i - 2) % N]) * x[(i - 1) % N] - x[i] + F
-        return dxdt
+        Returns a cached DAPyr function pointer for the given system and parameters.
 
-    @staticmethod
-    def lorenz05(x, F=8.0, K=1):
-        """
-        Lorenz 2005 Model II system. 
-        Generalization of Lorenz 96 with spatial smoothing.
-        If K=1, it is identical to Lorenz 96.
-        """
-        N = len(x)
-        dxdt = np.zeros(N)
-        
-        # Optimization for K=1 (Classic L96)
-        if K == 1:
-            for i in range(N):
-                dxdt[i] = (x[(i + 1) % N] - x[(i - 2) % N]) * x[(i - 1) % N] - x[i] + F
-            return dxdt
+        DAPyr's make_rhs_* functions trigger Numba JIT compilation on first call,
+        so results are cached by (system_type, params) to avoid recompiling on
+        every trajectory generation.
 
-        # Model II smoothing parameter K
-        J = K // 2
-        if K % 2 == 0:
-            w = np.ones(2*J + 1)
-            w[0] = 0.5
-            w[-1] = 0.5
-        else:
-            w = np.ones(2*J + 1)
-        
-        for n in range(N):
-            val = 0
-            for j_idx, j in enumerate(range(-J, J+1)):
-                for l_idx, l in enumerate(range(-J, J+1)):
-                    weight = w[j_idx] * w[l_idx]
-                    t1 = -x[(n - 2 * K - l) % N] * x[(n - K - j + l) % N]
-                    t2 = x[(n - K + j - l) % N] * x[(n + K + l) % N]
-                    val += weight * (t1 + t2)
-            
-            dxdt[n] = val / (K * K) - x[n] + F
-        return dxdt
-
-    @classmethod
-    def get_system(cls, system_type):
-        if system_type == '63':
-            return cls.lorenz63
-        elif system_type == '96':
-            return cls.lorenz96
-        elif system_type == '05':
-            return cls.lorenz05
-        else:
-            raise ValueError(f"Unknown Lorenz system type: {system_type}")
+        Parameter mapping from the public API to DAPyr:
+            L63:  sigma -> s,  rho -> r,  beta -> b
+            L96:  F -> F
+            L05:  F -> l05_F / l05_Fe,  K -> l05_K
+        """
+        cache_key = (system_type, frozenset(params.items()))
+        if cache_key not in _rhs_cache:
+            if system_type == '63':
+                rhs = make_rhs_l63({
+                    's': params.get('sigma', 10.0),
+                    'r': params.get('rho', 28.0),
+                    'b': params.get('beta', 8/3),
+                })
+            elif system_type == '96':
+                rhs = make_rhs_l96({
+                    'F': params.get('F', 8.0),
+                })
+            elif system_type == '05':
+                rhs = make_rhs_l05({
+                    'l05_K':  params.get('K', 32),
+                    'l05_I':  params.get('l05_I', 12),
+                    'l05_b':  params.get('l05_b', 10.0),
+                    'l05_c':  params.get('l05_c', 2.5),
+                    'l05_F':  params.get('F', 15.0),
+                    'l05_Fe': params.get('F', 15.0),
+                })
+            else:
+                raise ValueError(f"Unknown Lorenz system type: {system_type}")
+            _rhs_cache[cache_key] = (rhs, rhs.address)
+        return _rhs_cache[cache_key][1]
 
     @classmethod
     def generate_trajectory(cls, system_type, x0, dt, n_steps, **params):
         """
-        Generates a trajectory for a given Lorenz system.
+        Generates a trajectory using DAPyr's RK45/LSODA integrator.
+
+        Parameters
+        ----------
+        system_type : str
+            '63', '96', or '05'
+        x0 : array-like
+            Initial state. L96 requires len(x0)==40; L05 requires len(x0)==480.
+        dt : float
+            Integration time step.
+        n_steps : int
+            Number of steps (including the initial state).
+        **params
+            System parameters forwarded to the RHS:
+            L63: sigma, rho, beta
+            L96: F
+            L05: F, K  (plus optional l05_I, l05_b, l05_c)
         """
-        f = cls.get_system(system_type)
-        x0 = np.array(x0)
-        nx = len(x0)
+        x = np.array(x0, dtype=float)
+
+        if system_type == '96' and len(x) != 40:
+            raise ValueError(
+                f"DAPyr's L96 kernel requires N=40, got N={len(x)}."
+            )
+        if system_type == '05' and len(x) != 480:
+            raise ValueError(
+                f"DAPyr's L05 kernel requires N=480, got N={len(x)}."
+            )
+
+        funcptr = cls._get_funcptr(system_type, **params)
+        nx = len(x)
         trajectory = np.empty((n_steps, nx))
-        trajectory[0] = x0
-        x = x0.copy()
-        
+        trajectory[0] = x.copy()
+
         for i in range(1, n_steps):
-            x += dt * f(x, **params)
+            x, error = dapyr_model(x, dt, 1, funcptr)
+            if error:
+                raise RuntimeError(
+                    f"DAPyr integration failed at step {i} for system '{system_type}'."
+                )
             trajectory[i] = x
-            
+
         return trajectory

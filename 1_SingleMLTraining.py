@@ -58,13 +58,9 @@ sidebar = html.Div([
             dbc.Label("Lorenz System"),
             dcc.Dropdown(
                 id="system-type",
-                options=[{"label": "Lorenz 63", "value": "63"}, {"label": "Lorenz 96", "value": "96"}],
+                options=[{"label": "Lorenz 63", "value": "63"}, {"label": "Lorenz 96 (N=40)", "value": "96"}],
                 value="63"
             ),
-            html.Div([
-                dbc.Label("L96 Dimension (N)"),
-                dbc.Input(id="l96-n", type="number", value=40),
-            ], id="l96-n-div", style={"display": "none"}),
             dbc.Label("History Steps (Input size)"),
             dbc.Input(id="prev-steps", type="number", value=3),
         ], title="Architecture"),
@@ -181,20 +177,13 @@ app.layout = html.Div([sidebar, content])
 
 # --- Callbacks ---
 
-@app.callback(
-    Output("l96-n-div", "style"),
-    Input("system-type", "value")
-)
-def toggle_n_l96(system):
-    return {"display": "block"} if system == "96" else {"display": "none"}
-
 def training_thread_func(config):
     global training_state
     try:
         # 1. Dataset Generation
         sys_params = {}
         if config['system_type'] == '96':
-            sys_params['N'] = config['n_l96']
+            sys_params['N'] = 40   # Fixed by DAPyr's compiled L96 kernel
             sys_params['F'] = 8.0
             
         dataset = LorenzDataset(
@@ -223,7 +212,7 @@ def training_thread_func(config):
         val_loader = DataLoader(val_set, batch_size=config['batch_size'], pin_memory=(device.type=='cuda'))
         
         # Model
-        input_size = 3 if config['system_type'] == '63' else config['n_l96']
+        input_size = 3 if config['system_type'] == '63' else 40  # L96 N fixed by DAPyr
         hidden_list = [int(x.strip()) for x in config['hidden_layers'].split(',')]
         
         arch_meta = {
@@ -282,14 +271,14 @@ def training_thread_func(config):
      Output("stop-btn", "disabled"),
      Output("training-log", "children")],
     [Input("start-btn", "n_clicks")],
-    [State("model-type", "value"), State("system-type", "value"), State("l96-n", "value"),
+    [State("model-type", "value"), State("system-type", "value"),
      State("dt", "value"), State("save-dt", "value"), State("prev-steps", "value"),
      State("num-locs", "value"), State("ns-per-loc", "value"), State("batch-size", "value"),
      State("patience", "value"), State("hidden-layers", "value"), State("loss-func", "value"),
      State("split-train", "value"), State("split-val", "value"), State("split-test", "value")],
      prevent_initial_call=True
 )
-def start_tra(n, m, s, l_n, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st, sv, ste):
+def start_tra(n, m, s, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st, sv, ste):
     global training_state
     training_state = {
         'is_training': True, 'stop_requested': False,
@@ -299,7 +288,7 @@ def start_tra(n, m, s, l_n, dt, s_dt, prev, locs, ns, bs, pat, hidden, loss, st,
     }
     
     config = {
-        'model_type': m, 'system_type': s, 'n_l96': l_n, 'dt': dt, 'save_dt': s_dt,
+        'model_type': m, 'system_type': s, 'dt': dt, 'save_dt': s_dt,
         'prev_steps': prev, 'num_locs': locs, 'samples_per_loc': ns,
         'batch_size': bs, 'patience': pat, 'hidden_layers': hidden, 'loss_func': loss,
         'split_train': st, 'split_val': sv, 'split_test': ste
@@ -498,9 +487,10 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
         model.eval()
         
         # Base initial condition
-        x0 = np.array([1.0, 1.0, 1.0]) if nx == 3 else np.random.normal(0, 1, nx)
+        x0 = np.array([1.0, 1.0, 1.0]) if nx == 3 else np.ones(nx) * 8.0 + np.random.normal(0, 0.1, nx)
         sys_type = meta['system']
-        eval_params = {'N': meta['N']} if sys_type == '96' else {}
+        # For L96 pass F explicitly; N is fixed at 40 by DAPyr and inferred from x0 shape.
+        eval_params = {'F': 8.0} if sys_type == '96' else {}
         if noise_std is None:
             noise_std = 0.1
         

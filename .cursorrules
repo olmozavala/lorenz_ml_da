@@ -1,5 +1,0 @@
-# Project Specific Rules
-
-## Python Environment
-Always use the Python environment located at `/home/olmozavala/uv/envs/aieoas/bin/python`.
-When running commands, ensure this environment is used or activated.

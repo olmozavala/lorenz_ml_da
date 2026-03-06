@@ -1,7 +1,29 @@
-tqdm
-scipy
-dapper
-torch
-mpl-tools
-matplotlib
-numpy
+# ── Core scientific computing ─────────────────────────────────────────────────
+numpy==2.3.5
+matplotlib==3.10.3
+
+# ── Deep learning ─────────────────────────────────────────────────────────────
+# Install the CUDA-specific wheel separately if GPU support is needed:
+#   pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu126
+torch==2.10.0
+tensorboard                     # required by torch.utils.tensorboard.SummaryWriter
+
+# ── Data pipeline ─────────────────────────────────────────────────────────────
+scikit-learn==1.8.0             # StandardScaler in LorenzDataset
+tqdm==4.67.3                    # progress bars in LorenzDataset
+PyYAML==6.0.3                   # config serialisation in training scripts
+
+# ── Lorenz integration (DAPyr and its compiled-kernel dependencies) ───────────
+numba==0.64.0                   # JIT compilation of Lorenz RHS functions
+numbalsoda==0.3.4               # RK45 / LSODA ODE solver wrappers used by DAPyr
+# DAPyr is a local package — install from source before using this project:
+#   pip install <path-to-DAPyr>
+DAPyr==1.0.0
+
+# ── Web dashboards ────────────────────────────────────────────────────────────
+dash==4.0.0
+dash-bootstrap-components==2.0.4
+plotly==6.6.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest
