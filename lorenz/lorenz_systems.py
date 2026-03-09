@@ -104,3 +104,22 @@ class LorenzSystems:
             trajectory[i] = x
 
         return trajectory
+
+    @staticmethod
+    def warmup():
+        """Pre-compile DAPyr JIT kernels for all supported systems in background threads."""
+        import threading
+
+        def _compile(sys_type, x0, params):
+            try:
+                LorenzSystems.generate_trajectory(sys_type, x0, 0.01, 2, **params)
+            except Exception:
+                pass
+
+        jobs = [
+            threading.Thread(target=_compile, args=('63', np.ones(3), {}), daemon=True),
+            threading.Thread(target=_compile, args=('96', np.ones(40) * 8.0, {'F': 8.0}), daemon=True),
+            threading.Thread(target=_compile, args=('05', np.ones(480) * 15.0, {'F': 15.0, 'K': 32}), daemon=True),
+        ]
+        for j in jobs:
+            j.start()

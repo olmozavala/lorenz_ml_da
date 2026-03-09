@@ -392,13 +392,14 @@ def refresh_models_list(n, tab):
     return [{"label": f, "value": f} for f in sorted(files, reverse=True)]
 
 @app.callback(
-    Output("model-config-summary", "children"),
+    [Output("model-config-summary", "children"),
+     Output("eval-dt", "value")],
     Input("eval-model-select", "value"),
     prevent_initial_call=True
 )
 def show_model_config(model_file):
     if not model_file:
-        return "Select a model to see its configuration."
+        return "Select a model to see its configuration.", dash.no_update
     try:
         path = os.path.join("models", model_file)
         
@@ -427,6 +428,7 @@ def show_model_config(model_file):
         lines.append(f"  History Steps:   {meta.get('prev_time_steps', '?')}")
         lines.append(f"  Hidden Layers:   {meta.get('hidden_layers', '?')}")
         
+        effective_dt = dash.no_update
         if cfg:
             lines.append(f"\n═══ Training Parameters ═══")
             lines.append(f"  dt:              {cfg.get('dt', '?')}")
@@ -434,7 +436,8 @@ def show_model_config(model_file):
             dt_val = cfg.get('dt', 0)
             sdt_val = cfg.get('save_dt', 1)
             if isinstance(dt_val, (int, float)) and isinstance(sdt_val, (int, float)):
-                lines.append(f"  Effective Δt:    {dt_val * sdt_val:.4f}")
+                effective_dt = dt_val * sdt_val
+                lines.append(f"  Effective Δt:    {effective_dt:.4f}")
             lines.append(f"  Random Locs:     {cfg.get('num_locs', '?')}")
             lines.append(f"  Samples/Loc:     {cfg.get('samples_per_loc', '?')}")
             lines.append(f"  Batch Size:      {cfg.get('batch_size', '?')}")
@@ -443,10 +446,10 @@ def show_model_config(model_file):
             lines.append(f"  Split (T/V/Te):  {cfg.get('split_train','?')}% / {cfg.get('split_val','?')}% / {cfg.get('split_test','?')}%")
         else:
             lines.append("\n⚠ No YAML config found for this model.")
-        
-        return "\n".join(lines)
+
+        return "\n".join(lines), effective_dt
     except Exception as e:
-        return f"Error reading config: {str(e)}"
+        return f"Error reading config: {str(e)}", dash.no_update
 
 
 @app.callback(
@@ -490,9 +493,16 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
         # Use user-supplied eval dt (this is the effective dt per step for both truth and ML)
         eval_dt = float(eval_dt_input) if eval_dt_input else 0.01
         
-        # Init Model
-        m_class = DenseNN if meta['model_type'] == 'Dense' else (ResDenseNN if meta['model_type'] == 'ResDense' else LSTMNN)
-        if meta['model_type'] == 'LSTM':
+        # Init Model — accept both dashboard names ('Dense','ResDense','LSTM')
+        # and Main_ML.py names ('DenseNN','ResDenseNN','LSTMNN')
+        mt = meta['model_type']
+        if mt in ('Dense', 'DenseNN'):
+            m_class = DenseNN
+        elif mt in ('ResDense', 'ResDenseNN'):
+            m_class = ResDenseNN
+        else:
+            m_class = LSTMNN
+        if mt in ('LSTM', 'LSTMNN'):
             model = m_class(nx, prev_steps, nx, meta['hidden_layers'][0])
         else:
             model = m_class(nx, prev_steps, nx, meta['hidden_layers'], nn.ReLU, None)
@@ -560,38 +570,57 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
         # ML trajectory = shared history + ML predictions
         ml_trajs = [np.vstack([all_hists[i], preds[i]]) for i in range(ens_size)]
 
-        # --- 3D Plot ---
-        zi = 2 if nx >= 3 else 0
-        fig3d = go.Figure()
-        
-        # Green dot at initial location
-        fig3d.add_trace(go.Scatter3d(
-            x=[x0[0]], y=[x0[1]], z=[x0[zi]],
-            mode='markers', marker=dict(size=8, color='limegreen', symbol='diamond'),
-            name='Initial Condition', showlegend=True
-        ))
-        
-        # Truth ensemble (transparent blue)
-        for i, t in enumerate(truth_trajs):
-            fig3d.add_trace(go.Scatter3d(
-                x=t[:,0], y=t[:,1], z=t[:,zi],
-                mode='lines', line=dict(color='rgba(0, 0, 180, 0.4)', width=2),
-                showlegend=(i==0), name='Truth Ensemble'
-            ))
-        
-        # ML ensemble (transparent red)
-        for i, m in enumerate(ml_trajs):
-            fig3d.add_trace(go.Scatter3d(
-                x=m[:,0], y=m[:,1], z=m[:,zi],
-                mode='lines', line=dict(color='rgba(255, 50, 50, 0.35)', width=2),
-                showlegend=(i==0), name='ML Ensemble'
-            ))
-        
-        fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
-        
-        # --- 1D Plots ---
+        # --- Main Plot ---
         time_axis = np.arange(steps) * eval_dt
-        
+
+        if sys_type == '63':
+            # L63: 3D phase-space scatter
+            zi = 2
+            fig3d = go.Figure()
+            fig3d.add_trace(go.Scatter3d(
+                x=[x0[0]], y=[x0[1]], z=[x0[zi]],
+                mode='markers', marker=dict(size=8, color='limegreen', symbol='diamond'),
+                name='Initial Condition', showlegend=True
+            ))
+            for i, t in enumerate(truth_trajs):
+                fig3d.add_trace(go.Scatter3d(
+                    x=t[:,0], y=t[:,1], z=t[:,zi],
+                    mode='lines', line=dict(color='rgba(0, 0, 180, 0.4)', width=2),
+                    showlegend=(i==0), name='Truth Ensemble'
+                ))
+            for i, m in enumerate(ml_trajs):
+                fig3d.add_trace(go.Scatter3d(
+                    x=m[:,0], y=m[:,1], z=m[:,zi],
+                    mode='lines', line=dict(color='rgba(255, 50, 50, 0.35)', width=2),
+                    showlegend=(i==0), name='ML Ensemble'
+                ))
+            fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
+        else:
+            # L96/L05: Hovmöller heatmap (state index × time) for truth mean and ML mean
+            mean_truth = np.mean(np.stack(truth_trajs), axis=0)  # (steps, nx)
+            mean_ml    = np.mean(np.stack(ml_trajs),    axis=0)  # (steps, nx)
+            fig3d = go.Figure()
+            fig3d.add_trace(go.Heatmap(
+                z=mean_truth.T, x=time_axis, colorscale='RdBu_r',
+                colorbar=dict(title='State', x=0.45, len=0.9),
+                name='Truth', showscale=True,
+                xaxis='x', yaxis='y',
+            ))
+            fig3d.add_trace(go.Heatmap(
+                z=mean_ml.T, x=time_axis, colorscale='RdBu_r',
+                colorbar=dict(title='ML', x=1.0, len=0.9),
+                name='ML', showscale=True,
+                xaxis='x2', yaxis='y',
+            ))
+            fig3d.update_layout(
+                title=f"L{sys_type} Hovmöller — Truth (left) vs ML (right) ensemble mean",
+                xaxis=dict(title='Time', domain=[0, 0.47]),
+                xaxis2=dict(title='Time', domain=[0.53, 1.0]),
+                yaxis=dict(title='State Index'),
+                margin=dict(l=0, r=0, b=0, t=30),
+            )
+
+        # --- 1D Plots ---
         def mk1d(idx, title):
             f = go.Figure()
             for i, t in enumerate(truth_trajs):
@@ -604,12 +633,13 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
             f.update_layout(title=title, xaxis_title='Time', margin=dict(l=20,r=20,t=30,b=20), height=200)
             return f
 
-        # For L63 use classic labels; for high-dim systems label by state index
         if sys_type == '63':
+            plot_dims  = [0, 1, 2]
             dim_labels = ("X (t)", "Y (t)", "Z (t)")
         else:
-            dim_labels = ("Z₀ (t)", "Z₁ (t)", "Z₂ (t)")
-        return fig3d, mk1d(0, dim_labels[0]), mk1d(1, dim_labels[1]), mk1d(2, dim_labels[2])
+            plot_dims  = [0, nx // 4, nx // 2]
+            dim_labels = (f"Z₀ (t)", f"Z{nx//4} (t)", f"Z{nx//2} (t)")
+        return fig3d, mk1d(plot_dims[0], dim_labels[0]), mk1d(plot_dims[1], dim_labels[1]), mk1d(plot_dims[2], dim_labels[2])
     
     except Exception as e:
         traceback.print_exc()
@@ -618,4 +648,5 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
         return [err_fig]*4
 
 if __name__ == '__main__':
+    LorenzSystems.warmup()  # pre-compile DAPyr JIT kernels in background
     app.run(debug=True, port=8050, host='0.0.0.0')

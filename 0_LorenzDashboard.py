@@ -160,7 +160,7 @@ content = html.Div(
             children=[
                 dbc.Row([
                     dbc.Col(dbc.Card([
-                        dbc.CardHeader("3D Dynamic Visualization"),
+                        dbc.CardHeader("Dynamic Visualization"),
                         dbc.CardBody(dcc.Graph(id="3d-plot", style={"height": "60vh"}))
                     ], className="shadow-sm border-0"), width=12),
                 ]),
@@ -349,36 +349,62 @@ def update_plots(store_data, v1, v2, v3, v1_05, v2_05, v3_05):
                 indices.append(min(max(0, val), N - 1))
             labels = [f'x<sub>{idx + 1}</sub>' for idx in indices]
 
-        # 3-D plot
-        fig_3d = go.Figure()
-        for e in ens_trajs:
+        # Main plot — 3D phase-space for L63, Hovmöller heatmap for L96/L05
+        if model == 'L63':
+            fig_3d = go.Figure()
+            for e in ens_trajs:
+                fig_3d.add_trace(go.Scatter3d(
+                    x=e[:, indices[0]], y=e[:, indices[1]], z=e[:, indices[2]],
+                    mode='lines', line=dict(color='red', width=1),
+                    opacity=0.3, showlegend=False,
+                ))
             fig_3d.add_trace(go.Scatter3d(
-                x=e[:, indices[0]], y=e[:, indices[1]], z=e[:, indices[2]],
-                mode='lines', line=dict(color='red', width=1),
-                opacity=0.3, showlegend=False,
+                x=true_traj[:, indices[0]],
+                y=true_traj[:, indices[1]],
+                z=true_traj[:, indices[2]],
+                mode='lines', line=dict(color='darkblue', width=4), name='Truth',
             ))
-        fig_3d.add_trace(go.Scatter3d(
-            x=true_traj[:, indices[0]],
-            y=true_traj[:, indices[1]],
-            z=true_traj[:, indices[2]],
-            mode='lines', line=dict(color='darkblue', width=4), name='Truth',
-        ))
-        fig_3d.add_trace(go.Scatter3d(
-            x=[true_traj[0, indices[0]]],
-            y=[true_traj[0, indices[1]]],
-            z=[true_traj[0, indices[2]]],
-            mode='markers',
-            marker=dict(size=8, color='limegreen', symbol='circle'),
-            name='Start Location',
-        ))
-        fig_3d.update_layout(
-            scene=dict(
-                xaxis_title=labels[0],
-                yaxis_title=labels[1],
-                zaxis_title=labels[2],
-            ),
-            margin=dict(l=0, r=0, b=0, t=0),
-        )
+            fig_3d.add_trace(go.Scatter3d(
+                x=[true_traj[0, indices[0]]],
+                y=[true_traj[0, indices[1]]],
+                z=[true_traj[0, indices[2]]],
+                mode='markers',
+                marker=dict(size=8, color='limegreen', symbol='circle'),
+                name='Start Location',
+            ))
+            fig_3d.update_layout(
+                scene=dict(
+                    xaxis_title=labels[0],
+                    yaxis_title=labels[1],
+                    zaxis_title=labels[2],
+                ),
+                margin=dict(l=0, r=0, b=0, t=0),
+            )
+        else:
+            # Hovmöller: side-by-side truth (left) vs ensemble mean (right)
+            mean_ens = np.mean(np.stack(ens_trajs), axis=0)  # (steps, N)
+            fig_3d = go.Figure()
+            fig_3d.add_trace(go.Heatmap(
+                z=true_traj.T, x=time,   # (N, steps) → state index on y-axis
+                colorscale='RdBu_r',
+                colorbar=dict(title='State', x=0.45, len=0.9),
+                name='Truth', showscale=True,
+                xaxis='x', yaxis='y',
+            ))
+            fig_3d.add_trace(go.Heatmap(
+                z=mean_ens.T, x=time,
+                colorscale='RdBu_r',
+                colorbar=dict(title='Ens. Mean', x=1.0, len=0.9),
+                name='Ensemble Mean', showscale=True,
+                xaxis='x2', yaxis='y',
+            ))
+            fig_3d.update_layout(
+                title=f"L{model[1:]} Hovmöller — Truth (left) vs Ensemble Mean (right)",
+                xaxis=dict(title='Time', domain=[0, 0.47]),
+                xaxis2=dict(title='Time', domain=[0.53, 1.0]),
+                yaxis=dict(title='State Index'),
+                margin=dict(l=0, r=0, b=0, t=30),
+            )
 
         # 1-D time series
         def mk1d(col_idx, lbl):
