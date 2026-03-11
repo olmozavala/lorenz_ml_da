@@ -49,7 +49,7 @@ class LorenzSystems:
                     'l05_K':  params.get('K', 32),
                     'l05_I':  params.get('l05_I', 12),
                     'l05_b':  params.get('l05_b', 10.0),
-                    'l05_c':  params.get('l05_c', 2.5),
+                    'l05_c':  params.get('l05_c', 0.6),
                     'l05_F':  params.get('F', 15.0),
                     'l05_Fe': params.get('F', 15.0),
                 })

@@ -4,21 +4,23 @@
 
 dataset:
   system_type: '05'          # '63' (L63) | '96' (L96, N=40) | '05' (L05 Model III, N=480)
-  dt: 0.0001                 # integration time step
-  ns: 50000                  # samples per start location (Ns)
+  dt: 0.001                 # integration time step
+  ns: 5000                  # samples per start location (Ns)
   save_dt: 10                # subsampling factor  →  effective Δt = dt × save_dt
-  std: 0.0                   # observation noise std  (0 = clean trajectories)
-  prev_time_steps: 3         # history window size fed to the model
-  num_start_locations: 10    # number of independent random-IC trajectories
+  std: 0.1                   # observation noise std  (0 = clean trajectories)
+  prev_time_steps: 8         # history window size fed to the model
+  ds_noise: false            # add noise to the dataset
+  num_start_locations: 50    # number of independent random-IC trajectories
 
   # Physics parameters — ignored for L63 (uses fixed σ=10/ρ=28/β=8/3)
   # L96:  {F: 8.0}
   # L05:  {F: 15.0, K: 32}
-  system_params: {F: 15.0, K: 32}
+  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
 
 model:
-  type: 'ResDenseNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN'
-  hidden_layers: [1024, 512, 512]
+  type: 'LSTMNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN'
+  # 64, 64, 32 is a good configuration for L63
+  hidden_layers: [1024, 1024, 512]
   hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
   output_activation: null
 
@@ -37,3 +39,4 @@ paths:
   outputs: 'models'         # full checkpoints (.pth) + configs (.yml) saved here
   models: 'models'           # (reserved for dashboard-trained models)
   runs: 'runs'               # TensorBoard logs
+  dataset_cache: 'dataset_cache'  # cached Lorenz trajectories

@@ -41,11 +41,13 @@ def run_training(config):
     model_cfg   = config['model']
     train_cfg   = config['training']
     paths_cfg   = config['paths']
+    cleanup = config.get('cleanup', False)
 
     for path in paths_cfg.values():
         os.makedirs(path, exist_ok=True)
 
-    cleanup_checkpoints(paths_cfg)
+    if cleanup:
+        cleanup_checkpoints(paths_cfg)
 
     sys_type = dataset_cfg['system_type']
 
@@ -70,6 +72,9 @@ def run_training(config):
         std=dataset_cfg.get('std', 0.0),
         prev_time_steps=dataset_cfg['prev_time_steps'],
         num_start_locations=dataset_cfg.get('num_start_locations', 1),
+        ds_noise=dataset_cfg.get('ds_noise', False),
+        cache_dir=paths_cfg.get('dataset_cache'),
+        cache_enabled=True,
         **sys_params
     )
 
