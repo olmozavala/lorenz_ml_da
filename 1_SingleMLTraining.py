@@ -163,8 +163,8 @@ content = html.Div([
                         dbc.Button("🔄 Refresh List", id="refresh-models-btn", color="info", className="mt-2 btn-sm"),
                     ], width=3),
                     dbc.Col([
-                        dbc.Label("Eval dt"),
-                        dbc.Input(id="eval-dt", type="number", value=0.01, step=0.001),
+                        dbc.Label("Effective Δt"),
+                        dbc.Input(id="eval-dt", type="number", value=0.01, step=0.001, disabled=True),
                     ], width=1),
                     dbc.Col([
                         dbc.Label("Forecast Steps"),
@@ -196,7 +196,11 @@ content = html.Div([
     ])
 ], style={"marginLeft": "28rem", "paddingRight": "2rem"})
 
-app.layout = html.Div([sidebar, content])
+app.layout = html.Div([
+    sidebar, content,
+    dcc.Store(id="eval-fine-dt"),
+    dcc.Store(id="eval-save-dt"),
+])
 
 # --- Callbacks ---
 
@@ -393,13 +397,16 @@ def refresh_models_list(n, tab):
 
 @app.callback(
     [Output("model-config-summary", "children"),
-     Output("eval-dt", "value")],
+     Output("eval-dt", "value"),
+     Output("eval-fine-dt", "data"),
+     Output("eval-save-dt", "data")],
     Input("eval-model-select", "value"),
     prevent_initial_call=True
 )
 def show_model_config(model_file):
+    no_updates = (dash.no_update, dash.no_update, dash.no_update)
     if not model_file:
-        return "Select a model to see its configuration.", dash.no_update
+        return "Select a model to see its configuration.", *no_updates
     try:
         path = os.path.join("models", model_file)
         
@@ -429,14 +436,18 @@ def show_model_config(model_file):
         lines.append(f"  Hidden Layers:   {meta.get('hidden_layers', '?')}")
         
         effective_dt = dash.no_update
+        fine_dt_out = dash.no_update
+        save_dt_out = dash.no_update
         if cfg:
             lines.append(f"\n═══ Training Parameters ═══")
-            lines.append(f"  dt:              {cfg.get('dt', '?')}")
-            lines.append(f"  Save Dt (skip):  {cfg.get('save_dt', '?')}")
             dt_val = cfg.get('dt', 0)
             sdt_val = cfg.get('save_dt', 1)
+            lines.append(f"  Integration dt:  {dt_val}")
+            lines.append(f"  Save Dt (skip):  {sdt_val}")
             if isinstance(dt_val, (int, float)) and isinstance(sdt_val, (int, float)):
                 effective_dt = dt_val * sdt_val
+                fine_dt_out = dt_val
+                save_dt_out = sdt_val
                 lines.append(f"  Effective Δt:    {effective_dt:.4f}")
             lines.append(f"  Random Locs:     {cfg.get('num_locs', '?')}")
             lines.append(f"  Samples/Loc:     {cfg.get('samples_per_loc', '?')}")
@@ -447,9 +458,9 @@ def show_model_config(model_file):
         else:
             lines.append("\n⚠ No YAML config found for this model.")
 
-        return "\n".join(lines), effective_dt
+        return "\n".join(lines), effective_dt, fine_dt_out, save_dt_out
     except Exception as e:
-        return f"Error reading config: {str(e)}", dash.no_update
+        return f"Error reading config: {str(e)}", *no_updates
 
 
 @app.callback(
@@ -459,11 +470,12 @@ def show_model_config(model_file):
      Output("eval-z-plot", "figure")],
     [Input("eval-run-btn", "n_clicks")],
     [State("eval-model-select", "value"), State("eval-dt", "value"),
-     State("eval-steps", "value"), 
-     State("eval-ens-size", "value"), State("eval-noise", "value")],
+     State("eval-steps", "value"),
+     State("eval-ens-size", "value"), State("eval-noise", "value"),
+     State("eval-fine-dt", "data"), State("eval-save-dt", "data")],
     prevent_initial_call=True
 )
-def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
+def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std, fine_dt_val, save_dt_val):
     empty = [go.Figure()]*4
     if not model_file: return empty
     
@@ -548,10 +560,27 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std):
                 eval_params = {'F': 15.0, 'K': 32}
         
         # 1) Generate TRUTH ensemble (perturbed ICs through full Lorenz)
+        # Use fine dt + subsampling when available (required for L05 stability).
+        # The ML model was trained on data subsampled at save_dt, so the truth
+        # must be generated at the same effective resolution for fair comparison.
+        use_subsampling = fine_dt_val is not None and save_dt_val is not None
+        if use_subsampling:
+            fine_dt = float(fine_dt_val)
+            save_dt_int = int(save_dt_val)
+
         truth_trajs = []
         for i in range(ens_size):
             xi = x0 + np.random.normal(0, noise_std, nx) if i > 0 else x0
-            traj = LorenzSystems.generate_trajectory(sys_type, xi, eval_dt, steps, **eval_params)
+            if use_subsampling:
+                n_fine = steps * save_dt_int
+                traj_fine = LorenzSystems.generate_trajectory(
+                    sys_type, xi, fine_dt, n_fine, **eval_params
+                )
+                traj = traj_fine[::save_dt_int]
+            else:
+                traj = LorenzSystems.generate_trajectory(
+                    sys_type, xi, eval_dt, steps, **eval_params
+                )
             truth_trajs.append(traj)
         
         # 2) ML ensemble: use first prev_steps of EACH truth traj as shared history

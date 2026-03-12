@@ -4,13 +4,13 @@
 
 dataset:
   system_type: '05'          # '63' (L63) | '96' (L96, N=40) | '05' (L05 Model III, N=480)
-  dt: 0.001                 # integration time step
-  ns: 5000                  # samples per start location (Ns)
+  dt: 0.001                  # integration time step
+  ns: 5000                   # samples per start location (Ns)
   save_dt: 10                # subsampling factor  →  effective Δt = dt × save_dt
   std: 0.1                   # observation noise std  (0 = clean trajectories)
   prev_time_steps: 8         # history window size fed to the model
   ds_noise: false            # add noise to the dataset
-  num_start_locations: 50    # number of independent random-IC trajectories
+  num_start_locations: 1000    # number of independent random-IC trajectories
 
   # Physics parameters — ignored for L63 (uses fixed σ=10/ρ=28/β=8/3)
   # L96:  {F: 8.0}
