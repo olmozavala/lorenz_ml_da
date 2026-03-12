@@ -12,6 +12,7 @@ import os
 import sys
 import traceback
 import yaml
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, save_model, load_model
 from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS, _SYSTEM_IC_CENTER
@@ -32,7 +33,16 @@ training_state = {
     'sample_trajectory': None  # Store one raw trajectory for preview
 }
 
-app = dash.Dash(__name__, 
+# Global state to track evaluation progress (mirrors training_state pattern)
+eval_state = {
+    'is_running': False,
+    'progress': 0,
+    'total': 0,
+    'result': None,
+    'error': None,
+}
+
+app = dash.Dash(__name__,
                 external_stylesheets=[dbc.themes.LUX], 
                 suppress_callback_exceptions=True,
                 title="Lorenz ML Studio")
@@ -163,10 +173,6 @@ content = html.Div([
                         dbc.Button("🔄 Refresh List", id="refresh-models-btn", color="info", className="mt-2 btn-sm"),
                     ], width=3),
                     dbc.Col([
-                        dbc.Label("Effective Δt"),
-                        dbc.Input(id="eval-dt", type="number", value=0.01, step=0.001, disabled=True),
-                    ], width=1),
-                    dbc.Col([
                         dbc.Label("Forecast Steps"),
                         dbc.Input(id="eval-steps", type="number", value=200),
                     ], width=2),
@@ -180,17 +186,48 @@ content = html.Div([
                     ], width=2),
                     dbc.Col([
                         dbc.Button("⚡ Run Eval", id="eval-run-btn", color="success", className="mt-4 w-100"),
-                    ], width=2),
+                        html.Div(id="eval-progress", className="mt-1",
+                                 style={"fontSize": "0.8rem", "color": "#666"}),
+                    ], width=3),
                 ]),
+                dcc.Interval(id="eval-interval", interval=500, n_intervals=0, disabled=True),
                 html.Hr(),
                 dbc.Row([
                     dbc.Col(dbc.Card([dbc.CardBody(dcc.Graph(id="eval-3d-plot", style={"height": "55vh"}))], className="shadow-sm border-0"), width=12),
                 ]),
                 dbc.Row([
-                    dbc.Col(dcc.Graph(id="eval-x-plot", style={"height": "25vh"}), width=4),
-                    dbc.Col(dcc.Graph(id="eval-y-plot", style={"height": "25vh"}), width=4),
-                    dbc.Col(dcc.Graph(id="eval-z-plot", style={"height": "25vh"}), width=4),
-                ], className="mt-3")
+                    dbc.Col([
+                        dbc.Label("Plot 1 Variable"),
+                        dcc.Dropdown(id="eval-var-select-0", options=[], value=None,
+                                     placeholder="Select variable...", searchable=True),
+                    ], width=4),
+                    dbc.Col([
+                        dbc.Label("Plot 2 Variable"),
+                        dcc.Dropdown(id="eval-var-select-1", options=[], value=None,
+                                     placeholder="Select variable...", searchable=True),
+                    ], width=4),
+                    dbc.Col([
+                        dbc.Label("Plot 3 Variable"),
+                        dcc.Dropdown(id="eval-var-select-2", options=[], value=None,
+                                     placeholder="Select variable...", searchable=True),
+                    ], width=4),
+                ], className="mt-3"),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("Plot Style", className="me-2"),
+                        dbc.RadioItems(
+                            id="eval-plot-type",
+                            options=[{"label": "Line", "value": "line"},
+                                     {"label": "Polar", "value": "polar"}],
+                            value="line", inline=True,
+                        ),
+                    ], width="auto"),
+                ], className="mt-2"),
+                dbc.Row([
+                    dbc.Col(dcc.Graph(id="eval-x-plot", style={"height": "35vh"}), width=4),
+                    dbc.Col(dcc.Graph(id="eval-y-plot", style={"height": "35vh"}), width=4),
+                    dbc.Col(dcc.Graph(id="eval-z-plot", style={"height": "35vh"}), width=4),
+                ], className="mt-2")
             ], fluid=True)
         ]),
     ])
@@ -200,6 +237,7 @@ app.layout = html.Div([
     sidebar, content,
     dcc.Store(id="eval-fine-dt"),
     dcc.Store(id="eval-save-dt"),
+    dcc.Store(id="eval-traj-store"),
 ])
 
 # --- Callbacks ---
@@ -397,29 +435,35 @@ def refresh_models_list(n, tab):
 
 @app.callback(
     [Output("model-config-summary", "children"),
-     Output("eval-dt", "value"),
      Output("eval-fine-dt", "data"),
-     Output("eval-save-dt", "data")],
+     Output("eval-save-dt", "data"),
+     Output("eval-var-select-0", "options"),
+     Output("eval-var-select-1", "options"),
+     Output("eval-var-select-2", "options"),
+     Output("eval-var-select-0", "value"),
+     Output("eval-var-select-1", "value"),
+     Output("eval-var-select-2", "value")],
     Input("eval-model-select", "value"),
     prevent_initial_call=True
 )
 def show_model_config(model_file):
-    no_updates = (dash.no_update, dash.no_update, dash.no_update)
+    n_extra = 8  # number of outputs beyond the summary text
+    no_updates = tuple(dash.no_update for _ in range(n_extra))
     if not model_file:
         return "Select a model to see its configuration.", *no_updates
     try:
         path = os.path.join("models", model_file)
-        
+
         # Find matching YAML (strip _best_model suffix if present)
         base = model_file.replace('_best_model.pth', '').replace('.pth', '')
         yml_path = os.path.join("models", f"{base}.yml")
-        
+
         # Try architecture from checkpoint first, fall back to YAML
         meta = {}
         if os.path.exists(path):
             cp = torch.load(path, map_location='cpu', weights_only=False)
             meta = cp.get('architecture', {})
-        
+
         cfg = {}
         if os.path.exists(yml_path):
             with open(yml_path, 'r') as f:
@@ -427,15 +471,14 @@ def show_model_config(model_file):
             # YAML may contain architecture if checkpoint doesn't
             if not meta and 'architecture' in cfg:
                 meta = cfg['architecture']
-        
+
         lines = ["═══ Architecture ═══"]
         lines.append(f"  Model Type:      {meta.get('model_type', '?')}")
         lines.append(f"  Lorenz System:   L{meta.get('system', '?')}")
         lines.append(f"  Input Size (nx): {meta.get('input_size', '?')}")
         lines.append(f"  History Steps:   {meta.get('prev_time_steps', '?')}")
         lines.append(f"  Hidden Layers:   {meta.get('hidden_layers', '?')}")
-        
-        effective_dt = dash.no_update
+
         fine_dt_out = dash.no_update
         save_dt_out = dash.no_update
         if cfg:
@@ -458,55 +501,76 @@ def show_model_config(model_file):
         else:
             lines.append("\n⚠ No YAML config found for this model.")
 
-        return "\n".join(lines), effective_dt, fine_dt_out, save_dt_out
+        # Build variable selector options based on system type
+        nx = meta.get('input_size', 3)
+        sys_type = meta.get('system', '63')
+        if sys_type == '63':
+            var_options = [
+                {"label": "X (dim 0)", "value": 0},
+                {"label": "Y (dim 1)", "value": 1},
+                {"label": "Z (dim 2)", "value": 2},
+            ]
+            default_vars = [0, 1, 2]
+        else:
+            var_options = [{"label": f"Z{i}", "value": i} for i in range(nx)]
+            default_vars = [0, nx // 4, nx // 2]
+
+        return ("\n".join(lines), fine_dt_out, save_dt_out,
+                var_options, var_options, var_options,
+                default_vars[0], default_vars[1], default_vars[2])
     except Exception as e:
         return f"Error reading config: {str(e)}", *no_updates
 
 
-@app.callback(
-    [Output("eval-3d-plot", "figure"),
-     Output("eval-x-plot", "figure"),
-     Output("eval-y-plot", "figure"),
-     Output("eval-z-plot", "figure")],
-    [Input("eval-run-btn", "n_clicks")],
-    [State("eval-model-select", "value"), State("eval-dt", "value"),
-     State("eval-steps", "value"),
-     State("eval-ens-size", "value"), State("eval-noise", "value"),
-     State("eval-fine-dt", "data"), State("eval-save-dt", "data")],
-    prevent_initial_call=True
-)
-def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std, fine_dt_val, save_dt_val):
-    empty = [go.Figure()]*4
-    if not model_file: return empty
-    
+def _generate_one_truth(sys_type, xi, fine_dt, save_dt_int, steps, eval_dt,
+                        use_subsampling, eval_params):
+    """Generate a single truth trajectory (called from thread pool)."""
+    if use_subsampling:
+        n_fine = steps * save_dt_int
+        traj_fine = LorenzSystems.generate_trajectory(
+            sys_type, xi, fine_dt, n_fine, **eval_params)
+        return traj_fine[::save_dt_int]
+    else:
+        return LorenzSystems.generate_trajectory(
+            sys_type, xi, eval_dt, steps, **eval_params)
+
+
+def _eval_thread_func(config):
+    """Background thread: generate truth + ML ensembles, update eval_state."""
+    global eval_state
     try:
+        model_file = config['model_file']
+        steps = config['steps']
+        ens_size = config['ens_size']
+        noise_std = config['noise_std']
+        fine_dt_val = config['fine_dt_val']
+        save_dt_val = config['save_dt_val']
+
         path = os.path.join("models", model_file)
         cp = torch.load(path, map_location='cpu', weights_only=False)
-        
-        # Find matching YAML (strip _best_model suffix if present)
+
         base = model_file.replace('_best_model.pth', '').replace('.pth', '')
         yml_path = os.path.join("models", f"{base}.yml")
-        
-        # Read architecture: from checkpoint if available, else from YAML
+
         meta = cp.get('architecture', None)
         cfg = {}
         if os.path.exists(yml_path):
             with open(yml_path, 'r') as f:
                 cfg = yaml.safe_load(f) or {}
-        
+
         if meta is None:
             meta = cfg.get('architecture', {})
         if not meta:
             raise ValueError("No architecture metadata found in checkpoint or YAML!")
-        
+
         nx = meta['input_size']
         prev_steps = meta['prev_time_steps']
-        
-        # Use user-supplied eval dt (this is the effective dt per step for both truth and ML)
-        eval_dt = float(eval_dt_input) if eval_dt_input else 0.01
-        
-        # Init Model — accept both dashboard names ('Dense','ResDense','LSTM')
-        # and Main_ML.py names ('DenseNN','ResDenseNN','LSTMNN')
+
+        if fine_dt_val is not None and save_dt_val is not None:
+            eval_dt = float(fine_dt_val) * int(save_dt_val)
+        else:
+            eval_dt = 0.01
+
         mt = meta['model_type']
         if mt in ('Dense', 'DenseNN'):
             m_class = DenseNN
@@ -518,15 +582,12 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std, fine_dt_v
             model = m_class(nx, prev_steps, nx, meta['hidden_layers'][0])
         else:
             model = m_class(nx, prev_steps, nx, meta['hidden_layers'], nn.ReLU, None)
-        
-        # Handle both checkpoint formats: full (dict with model_state_dict) and raw state_dict
+
         if 'model_state_dict' in cp:
             model.load_state_dict(cp['model_state_dict'])
             mean, std = cp['train_mean'], cp['train_std']
         else:
-            # Raw state_dict (from _best_model.pth) — load weights directly
             model.load_state_dict(cp)
-            # Get mean/std from YAML, or from full checkpoint
             if 'train_mean' in cfg and 'train_std' in cfg:
                 mean = np.array(cfg['train_mean'])
                 std = np.array(cfg['train_std'])
@@ -538,143 +599,362 @@ def run_eval(n, model_file, eval_dt_input, steps, ens_size, noise_std, fine_dt_v
                 else:
                     raise ValueError("Cannot find train_mean/train_std in YAML or checkpoint.")
         model.eval()
-        
+
         sys_type = meta['system']
         if noise_std is None:
             noise_std = 0.1
 
-        # Base IC near the attractor equilibrium for each system
         if sys_type == '63':
             x0 = np.array([1.0, 1.0, 1.0])
         else:
             center = _SYSTEM_IC_CENTER.get(sys_type, 8.0)
             x0 = np.ones(nx) * center + np.random.normal(0, 0.1, nx)
 
-        # Physics parameters: read from arch_meta (stored at training time).
-        # Falls back to sensible defaults for checkpoints trained before this change.
         eval_params = meta.get('system_params', {})
         if not eval_params:
             if sys_type == '96':
                 eval_params = {'F': 8.0}
             elif sys_type == '05':
                 eval_params = {'F': 15.0, 'K': 32}
-        
-        # 1) Generate TRUTH ensemble (perturbed ICs through full Lorenz)
-        # Use fine dt + subsampling when available (required for L05 stability).
-        # The ML model was trained on data subsampled at save_dt, so the truth
-        # must be generated at the same effective resolution for fair comparison.
-        use_subsampling = fine_dt_val is not None and save_dt_val is not None
-        if use_subsampling:
-            fine_dt = float(fine_dt_val)
-            save_dt_int = int(save_dt_val)
 
-        truth_trajs = []
+        use_subsampling = fine_dt_val is not None and save_dt_val is not None
+        fine_dt = float(fine_dt_val) if use_subsampling else 0.0
+        save_dt_int = int(save_dt_val) if use_subsampling else 1
+
+        # --- Parallel truth ensemble generation ---
+        eval_state['total'] = ens_size
+        eval_state['progress'] = 0
+
+        # Pre-compute ICs (must be done in main thread for reproducibility)
+        ics = []
         for i in range(ens_size):
-            xi = x0 + np.random.normal(0, noise_std, nx) if i > 0 else x0
-            if use_subsampling:
-                n_fine = steps * save_dt_int
-                traj_fine = LorenzSystems.generate_trajectory(
-                    sys_type, xi, fine_dt, n_fine, **eval_params
-                )
-                traj = traj_fine[::save_dt_int]
-            else:
-                traj = LorenzSystems.generate_trajectory(
-                    sys_type, xi, eval_dt, steps, **eval_params
-                )
-            truth_trajs.append(traj)
-        
-        # 2) ML ensemble: use first prev_steps of EACH truth traj as shared history
+            xi = x0 + np.random.normal(0, noise_std, nx) if i > 0 else x0.copy()
+            ics.append(xi)
+
+        n_workers = min(8, max(1, os.cpu_count() or 4))
+        truth_trajs = [None] * ens_size
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {}
+            for i, xi in enumerate(ics):
+                fut = pool.submit(_generate_one_truth, sys_type, xi,
+                                  fine_dt, save_dt_int, steps, eval_dt,
+                                  use_subsampling, eval_params)
+                futures[fut] = i
+
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                truth_trajs[idx] = fut.result()
+                eval_state['progress'] += 1
+
+        # --- ML ensemble ---
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model = model.to(device)
-        
-        # Extract the shared history (first prev_steps of each truth trajectory)
-        all_hists = np.stack([t[:prev_steps] for t in truth_trajs])  # (ens, prev_steps, nx)
+
+        all_hists = np.stack([t[:prev_steps] for t in truth_trajs])
         hists_norm = (all_hists - mean) / std
-        input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1), dtype=torch.float32).to(device)
-        
+        input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1),
+                                  dtype=torch.float32).to(device)
+
         with torch.no_grad():
-            preds_norm = recursive_rollout(model, input_seqs, steps - prev_steps, prev_steps, device)
+            preds_norm = recursive_rollout(model, input_seqs,
+                                           steps - prev_steps, prev_steps, device)
             preds = preds_norm.cpu().numpy() * std + mean
-        
-        # ML trajectory = shared history + ML predictions
+
         ml_trajs = [np.vstack([all_hists[i], preds[i]]) for i in range(ens_size)]
 
-        # --- Main Plot ---
+        eval_state['result'] = {
+            "truth_trajs": truth_trajs,
+            "ml_trajs": ml_trajs,
+            "eval_dt": eval_dt,
+            "sys_type": sys_type,
+            "nx": nx,
+            "x0": x0,
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        eval_state['error'] = str(e)
+    finally:
+        eval_state['is_running'] = False
+
+
+@app.callback(
+    [Output("eval-interval", "disabled"),
+     Output("eval-run-btn", "disabled"),
+     Output("eval-progress", "children")],
+    Input("eval-run-btn", "n_clicks"),
+    [State("eval-model-select", "value"),
+     State("eval-steps", "value"),
+     State("eval-ens-size", "value"), State("eval-noise", "value"),
+     State("eval-fine-dt", "data"), State("eval-save-dt", "data")],
+    prevent_initial_call=True
+)
+def eval_run_start(n, model_file, steps, ens_size, noise_std, fine_dt_val, save_dt_val):
+    """Launch evaluation in a background thread, return immediately."""
+    global eval_state
+    if not model_file:
+        return True, False, "No model selected."
+
+    eval_state = {
+        'is_running': True,
+        'progress': 0,
+        'total': ens_size or 20,
+        'result': None,
+        'error': None,
+    }
+
+    config = {
+        'model_file': model_file,
+        'steps': steps,
+        'ens_size': ens_size,
+        'noise_std': noise_std,
+        'fine_dt_val': fine_dt_val,
+        'save_dt_val': save_dt_val,
+    }
+    threading.Thread(target=_eval_thread_func, args=(config,), daemon=True).start()
+    return False, True, "Starting evaluation..."
+
+
+@app.callback(
+    [Output("eval-traj-store", "data"),
+     Output("eval-interval", "disabled", allow_duplicate=True),
+     Output("eval-run-btn", "disabled", allow_duplicate=True),
+     Output("eval-progress", "children", allow_duplicate=True)],
+    Input("eval-interval", "n_intervals"),
+    prevent_initial_call=True
+)
+def eval_poll(n):
+    """Poll the background evaluation thread and update UI."""
+    global eval_state
+    prog = eval_state['progress']
+    total = eval_state['total']
+
+    if eval_state['is_running']:
+        return (dash.no_update, dash.no_update, dash.no_update,
+                f"Integrating ensemble member {prog}/{total}...")
+
+    # Done — check for errors
+    if eval_state['error']:
+        msg = f"Error: {eval_state['error']}"
+        return None, True, False, msg
+
+    # Success — send lightweight trigger (data stays server-side in eval_state)
+    import time as _time
+    return {"ts": _time.time()}, True, False, f"Done ({total} members)."
+
+
+# ---------------------------------------------------------------------------
+# Plot callbacks — each reads from the trajectory store independently
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("eval-3d-plot", "figure"),
+    Input("eval-traj-store", "data"),
+    prevent_initial_call=True
+)
+def update_3d_plot(store_trigger):
+    """Render the main 3D/Hovmoller plot from server-side trajectory data."""
+    if store_trigger is None or eval_state.get('result') is None:
+        return go.Figure()
+    try:
+        data = eval_state['result']
+        truth_trajs = data["truth_trajs"]
+        ml_trajs = data["ml_trajs"]
+        eval_dt = data["eval_dt"]
+        sys_type = data["sys_type"]
+        nx = data["nx"]
+        x0 = data["x0"]
+        steps = len(truth_trajs[0])
         time_axis = np.arange(steps) * eval_dt
 
         if sys_type == '63':
-            # L63: 3D phase-space scatter
             zi = 2
-            fig3d = go.Figure()
-            fig3d.add_trace(go.Scatter3d(
+            fig = go.Figure()
+            fig.add_trace(go.Scatter3d(
                 x=[x0[0]], y=[x0[1]], z=[x0[zi]],
                 mode='markers', marker=dict(size=8, color='limegreen', symbol='diamond'),
                 name='Initial Condition', showlegend=True
             ))
             for i, t in enumerate(truth_trajs):
-                fig3d.add_trace(go.Scatter3d(
-                    x=t[:,0], y=t[:,1], z=t[:,zi],
+                fig.add_trace(go.Scatter3d(
+                    x=t[:, 0], y=t[:, 1], z=t[:, zi],
                     mode='lines', line=dict(color='rgba(0, 0, 180, 0.4)', width=2),
-                    showlegend=(i==0), name='Truth Ensemble'
+                    showlegend=(i == 0), name='Truth Ensemble'
                 ))
             for i, m in enumerate(ml_trajs):
-                fig3d.add_trace(go.Scatter3d(
-                    x=m[:,0], y=m[:,1], z=m[:,zi],
+                fig.add_trace(go.Scatter3d(
+                    x=m[:, 0], y=m[:, 1], z=m[:, zi],
                     mode='lines', line=dict(color='rgba(255, 50, 50, 0.35)', width=2),
-                    showlegend=(i==0), name='ML Ensemble'
+                    showlegend=(i == 0), name='ML Ensemble'
                 ))
-            fig3d.update_layout(scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"), margin=dict(l=0,r=0,b=0,t=0))
+            fig.update_layout(
+                scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
+                margin=dict(l=0, r=0, b=0, t=0),
+            )
         else:
-            # L96/L05: Hovmöller heatmap (state index × time) for truth mean and ML mean
-            mean_truth = np.mean(np.stack(truth_trajs), axis=0)  # (steps, nx)
-            mean_ml    = np.mean(np.stack(ml_trajs),    axis=0)  # (steps, nx)
-            fig3d = go.Figure()
-            fig3d.add_trace(go.Heatmap(
+            mean_truth = np.mean(np.stack(truth_trajs), axis=0)
+            mean_ml = np.mean(np.stack(ml_trajs), axis=0)
+            fig = go.Figure()
+            fig.add_trace(go.Heatmap(
                 z=mean_truth.T, x=time_axis, colorscale='RdBu_r',
                 colorbar=dict(title='State', x=0.45, len=0.9),
-                name='Truth', showscale=True,
-                xaxis='x', yaxis='y',
+                name='Truth', showscale=True, xaxis='x', yaxis='y',
             ))
-            fig3d.add_trace(go.Heatmap(
+            fig.add_trace(go.Heatmap(
                 z=mean_ml.T, x=time_axis, colorscale='RdBu_r',
                 colorbar=dict(title='ML', x=1.0, len=0.9),
-                name='ML', showscale=True,
-                xaxis='x2', yaxis='y',
+                name='ML', showscale=True, xaxis='x2', yaxis='y',
             ))
-            fig3d.update_layout(
-                title=f"L{sys_type} Hovmöller — Truth (left) vs ML (right) ensemble mean",
+            fig.update_layout(
+                title=f"L{sys_type} Hovmoller — Truth (left) vs ML (right) ensemble mean",
                 xaxis=dict(title='Time', domain=[0, 0.47]),
                 xaxis2=dict(title='Time', domain=[0.53, 1.0]),
                 yaxis=dict(title='State Index'),
                 margin=dict(l=0, r=0, b=0, t=30),
             )
-
-        # --- 1D Plots ---
-        def mk1d(idx, title):
-            f = go.Figure()
-            for i, t in enumerate(truth_trajs):
-                f.add_trace(go.Scatter(x=time_axis, y=t[:, idx], line=dict(color='rgba(0, 0, 180, 0.4)', width=1),
-                                       showlegend=(i==0), name='Truth'))
-            for i, m in enumerate(ml_trajs):
-                t_ml = np.arange(len(m)) * eval_dt
-                f.add_trace(go.Scatter(x=t_ml, y=m[:, idx], line=dict(color='rgba(255, 50, 50, 0.35)', width=1),
-                                       showlegend=(i==0), name='ML'))
-            f.update_layout(title=title, xaxis_title='Time', margin=dict(l=20,r=20,t=30,b=20), height=200)
-            return f
-
-        if sys_type == '63':
-            plot_dims  = [0, 1, 2]
-            dim_labels = ("X (t)", "Y (t)", "Z (t)")
-        else:
-            plot_dims  = [0, nx // 4, nx // 2]
-            dim_labels = (f"Z₀ (t)", f"Z{nx//4} (t)", f"Z{nx//2} (t)")
-        return fig3d, mk1d(plot_dims[0], dim_labels[0]), mk1d(plot_dims[1], dim_labels[1]), mk1d(plot_dims[2], dim_labels[2])
-    
+        return fig
     except Exception as e:
         traceback.print_exc()
-        err_fig = go.Figure()
-        err_fig.update_layout(title=f"Error: {str(e)}", template="simple_white")
-        return [err_fig]*4
+        err = go.Figure()
+        err.update_layout(title=f"Error: {str(e)}", template="simple_white")
+        return err
+
+
+def _mk_aux_plot(var_idx, plot_type="line"):
+    """Build a single auxiliary figure (line or polar) for the given variable index."""
+    data = eval_state['result']
+    truth_trajs = data["truth_trajs"]
+    ml_trajs = data["ml_trajs"]
+    eval_dt = data["eval_dt"]
+    nx = data["nx"]
+    sys_type = data["sys_type"]
+    idx = int(var_idx) if var_idx is not None else 0
+    idx = max(0, min(idx, nx - 1))
+
+    # Build title label
+    if sys_type == '63':
+        dim_name = {0: 'X', 1: 'Y', 2: 'Z'}.get(idx, f'Dim {idx}')
+    else:
+        dim_name = f'Z{idx}'
+
+    fig = go.Figure()
+
+    if plot_type == "polar":
+        # --- Polar plot: theta wraps every 1 MTU ---
+        T_MTU = 1.0
+        all_vals = [t[:, idx] for t in truth_trajs] + [m[:, idx] for m in ml_trajs]
+        r_min = min(v.min() for v in all_vals)
+        r_offset = r_min - 0.1  # shift so minimum radius is 0.1
+
+        for i, t in enumerate(truth_trajs):
+            time_arr = np.arange(len(t)) * eval_dt
+            theta = (time_arr % T_MTU) / T_MTU * 360.0
+            fig.add_trace(go.Scatterpolar(
+                r=t[:, idx] - r_offset, theta=theta, mode='lines',
+                line=dict(color='rgba(0, 0, 180, 0.3)', width=1),
+                showlegend=(i == 0), name='Truth', thetaunit='degrees',
+            ))
+        for i, m in enumerate(ml_trajs):
+            time_arr = np.arange(len(m)) * eval_dt
+            theta = (time_arr % T_MTU) / T_MTU * 360.0
+            fig.add_trace(go.Scatterpolar(
+                r=m[:, idx] - r_offset, theta=theta, mode='lines',
+                line=dict(color='rgba(255, 50, 50, 0.25)', width=1),
+                showlegend=(i == 0), name='ML', thetaunit='degrees',
+            ))
+        fig.update_layout(
+            title=f"{dim_name} — Polar (1 rev = 1 MTU)",
+            polar=dict(
+                radialaxis=dict(visible=True),
+                angularaxis=dict(
+                    tickvals=[0, 90, 180, 270],
+                    ticktext=['0', '0.25 MTU', '0.5 MTU', '0.75 MTU'],
+                    direction='clockwise',
+                ),
+            ),
+            margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=True,
+        )
+    else:
+        # --- Standard line plot ---
+        steps = len(truth_trajs[0])
+        time_axis = np.arange(steps) * eval_dt
+        for i, t in enumerate(truth_trajs):
+            fig.add_trace(go.Scattergl(
+                x=time_axis, y=t[:, idx], mode='lines',
+                line=dict(color='rgba(0, 0, 180, 0.4)', width=1),
+                showlegend=(i == 0), name='Truth',
+            ))
+        for i, m in enumerate(ml_trajs):
+            t_ml = np.arange(len(m)) * eval_dt
+            fig.add_trace(go.Scattergl(
+                x=t_ml, y=m[:, idx], mode='lines',
+                line=dict(color='rgba(255, 50, 50, 0.35)', width=1),
+                showlegend=(i == 0), name='ML',
+            ))
+        fig.update_layout(
+            title=f"{dim_name} (t)",
+            xaxis_title='Time', margin=dict(l=20, r=20, t=30, b=20), height=300,
+        )
+
+    return fig
+
+
+@app.callback(
+    Output("eval-x-plot", "figure"),
+    [Input("eval-traj-store", "data"),
+     Input("eval-var-select-0", "value"),
+     Input("eval-plot-type", "value")],
+    prevent_initial_call=True
+)
+def update_aux_0(store_trigger, var_idx, plot_type):
+    if store_trigger is None or eval_state.get('result') is None:
+        return go.Figure()
+    try:
+        return _mk_aux_plot(var_idx, plot_type)
+    except Exception as e:
+        traceback.print_exc()
+        err = go.Figure()
+        err.update_layout(title=f"Error: {str(e)}", template="simple_white")
+        return err
+
+
+@app.callback(
+    Output("eval-y-plot", "figure"),
+    [Input("eval-traj-store", "data"),
+     Input("eval-var-select-1", "value"),
+     Input("eval-plot-type", "value")],
+    prevent_initial_call=True
+)
+def update_aux_1(store_trigger, var_idx, plot_type):
+    if store_trigger is None or eval_state.get('result') is None:
+        return go.Figure()
+    try:
+        return _mk_aux_plot(var_idx, plot_type)
+    except Exception as e:
+        traceback.print_exc()
+        err = go.Figure()
+        err.update_layout(title=f"Error: {str(e)}", template="simple_white")
+        return err
+
+
+@app.callback(
+    Output("eval-z-plot", "figure"),
+    [Input("eval-traj-store", "data"),
+     Input("eval-var-select-2", "value"),
+     Input("eval-plot-type", "value")],
+    prevent_initial_call=True
+)
+def update_aux_2(store_trigger, var_idx, plot_type):
+    if store_trigger is None or eval_state.get('result') is None:
+        return go.Figure()
+    try:
+        return _mk_aux_plot(var_idx, plot_type)
+    except Exception as e:
+        traceback.print_exc()
+        err = go.Figure()
+        err.update_layout(title=f"Error: {str(e)}", template="simple_white")
+        return err
+
 
 if __name__ == '__main__':
     LorenzSystems.warmup()  # pre-compile DAPyr JIT kernels in background
