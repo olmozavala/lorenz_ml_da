@@ -54,7 +54,7 @@ class LorenzDataset(Dataset):
             nt_truth = Ns * save_Dt + save_Dt
 
             print(f"Generating {system_type} trajectory...")
-            x_truth = LorenzSystems.generate_trajectory(
+            x_truth = LorenzSystems.generate_trajectory_fast(
                 system_type, current_x0, dt, nt_truth, **system_params
             )
 

@@ -1,3 +1,10 @@
+import os
+# Thread control: prevent oversubscription when using ThreadPoolExecutor.
+# Must be set BEFORE importing numpy/torch/numba.
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMBA_NUM_THREADS', '1')
+
 import dash
 from dash import dcc, html, Input, Output, State, ALL, callback
 import dash_bootstrap_components as dbc
@@ -8,11 +15,16 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 import threading
 import time
-import os
 import sys
 import traceback
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Limit PyTorch internal threads; parallelism is managed by ThreadPoolExecutor.
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+_N_PHYSICAL_CORES = max(1, (os.cpu_count() or 4) // 2)
 
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, save_model, load_model
 from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS, _SYSTEM_IC_CENTER
@@ -524,14 +536,20 @@ def show_model_config(model_file):
 
 def _generate_one_truth(sys_type, xi, fine_dt, save_dt_int, steps, eval_dt,
                         use_subsampling, eval_params):
-    """Generate a single truth trajectory (called from thread pool)."""
+    """Generate a single truth trajectory (called from thread pool).
+
+    Uses generate_trajectory_fast() which passes the full t_eval array to
+    numbalsoda in a single solver call, avoiding the per-step Python loop.
+    When subsampling, only the subsampled output times are requested so the
+    solver still integrates through the fine grid but only stores the desired
+    output points.
+    """
     if use_subsampling:
-        n_fine = steps * save_dt_int
-        traj_fine = LorenzSystems.generate_trajectory(
-            sys_type, xi, fine_dt, n_fine, **eval_params)
-        return traj_fine[::save_dt_int]
+        t_eval = np.linspace(0.0, fine_dt * save_dt_int * (steps - 1), steps)
+        return LorenzSystems.generate_trajectory_fast(
+            sys_type, xi, fine_dt, steps, t_eval=t_eval, **eval_params)
     else:
-        return LorenzSystems.generate_trajectory(
+        return LorenzSystems.generate_trajectory_fast(
             sys_type, xi, eval_dt, steps, **eval_params)
 
 
@@ -631,7 +649,11 @@ def _eval_thread_func(config):
             xi = x0 + np.random.normal(0, noise_std, nx) if i > 0 else x0.copy()
             ics.append(xi)
 
-        n_workers = min(8, max(1, os.cpu_count() or 4))
+        # Ensure JIT kernels are compiled before timed work
+        for t in _warmup_threads:
+            t.join(timeout=60)
+
+        n_workers = min(ens_size, _N_PHYSICAL_CORES)
         truth_trajs = [None] * ens_size
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {}
@@ -655,7 +677,7 @@ def _eval_thread_func(config):
         input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1),
                                   dtype=torch.float32).to(device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             preds_norm = recursive_rollout(model, input_seqs,
                                            steps - prev_steps, prev_steps, device)
             preds = preds_norm.cpu().numpy() * std + mean
@@ -956,6 +978,7 @@ def update_aux_2(store_trigger, var_idx, plot_type):
         return err
 
 
+_warmup_threads = LorenzSystems.warmup()  # pre-compile DAPyr JIT kernels in background
+
 if __name__ == '__main__':
-    LorenzSystems.warmup()  # pre-compile DAPyr JIT kernels in background
     app.run(debug=True, port=8050, host='0.0.0.0')

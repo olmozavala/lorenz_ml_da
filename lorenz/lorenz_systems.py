@@ -1,4 +1,5 @@
 import numpy as np
+from numbalsoda import solve_ivp as nb_solve_ivp, lsoda as nb_lsoda
 from DAPyr.MODELS import make_rhs_l63, make_rhs_l96, make_rhs_l05, model as dapyr_model
 
 # Module-level cache: (system_type, frozenset_of_params) -> (rhs_obj, funcptr_address)
@@ -58,29 +59,8 @@ class LorenzSystems:
             _rhs_cache[cache_key] = (rhs, rhs.address)
         return _rhs_cache[cache_key][1]
 
-    @classmethod
-    def generate_trajectory(cls, system_type, x0, dt, n_steps, **params):
-        """
-        Generates a trajectory using DAPyr's RK45/LSODA integrator.
-
-        Parameters
-        ----------
-        system_type : str
-            '63', '96', or '05'
-        x0 : array-like
-            Initial state. L96 requires len(x0)==40; L05 requires len(x0)==480.
-        dt : float
-            Integration time step.
-        n_steps : int
-            Number of steps (including the initial state).
-        **params
-            System parameters forwarded to the RHS:
-            L63: sigma, rho, beta
-            L96: F
-            L05: F, K  (plus optional l05_I, l05_b, l05_c)
-        """
-        x = np.array(x0, dtype=float)
-
+    @staticmethod
+    def _validate_state(system_type, x):
         if system_type == '96' and len(x) != 40:
             raise ValueError(
                 f"DAPyr's L96 kernel requires N=40, got N={len(x)}."
@@ -89,6 +69,17 @@ class LorenzSystems:
             raise ValueError(
                 f"DAPyr's L05 kernel requires N=480, got N={len(x)}."
             )
+
+    @classmethod
+    def generate_trajectory(cls, system_type, x0, dt, n_steps, **params):
+        """
+        Generates a trajectory using DAPyr's RK45/LSODA integrator (per-step loop).
+
+        This is the legacy method kept for compatibility.
+        Prefer generate_trajectory_fast() for better performance.
+        """
+        x = np.array(x0, dtype=float)
+        cls._validate_state(system_type, x)
 
         funcptr = cls._get_funcptr(system_type, **params)
         nx = len(x)
@@ -105,9 +96,71 @@ class LorenzSystems:
 
         return trajectory
 
+    @classmethod
+    def generate_trajectory_fast(cls, system_type, x0, dt, n_steps,
+                                 t_eval=None, **params):
+        """
+        Generates a trajectory via a single numbalsoda solve_ivp call.
+
+        Instead of looping in Python and calling the solver once per step,
+        this passes the full t_eval array to the solver, eliminating per-step
+        Python overhead (deepcopy, array allocation, solver setup).
+
+        Parameters
+        ----------
+        system_type : str
+            '63', '96', or '05'
+        x0 : array-like
+            Initial state.
+        dt : float
+            Integration time step.
+        n_steps : int
+            Number of output steps (including the initial state).
+        t_eval : ndarray, optional
+            Explicit output times.  When None, uses
+            ``np.linspace(0, dt*(n_steps-1), n_steps)``.
+        **params
+            System parameters forwarded to the RHS.
+        """
+        x = np.ascontiguousarray(x0, dtype=np.float64)
+        cls._validate_state(system_type, x)
+
+        funcptr = cls._get_funcptr(system_type, **params)
+
+        if t_eval is None:
+            t_eval = np.linspace(0.0, dt * (n_steps - 1), n_steps)
+        t_span = np.array([t_eval[0], t_eval[-1]])
+
+        sol = nb_solve_ivp(funcptr, t_span, x.copy(), t_eval,
+                           rtol=1e-9, atol=1e-30)
+
+        if sol.success and not np.allclose(sol.y[-1], 0.0):
+            return sol.y
+
+        # Fallback to LSODA for stiff regions
+        trajectory, success = nb_lsoda(funcptr, x.copy(), t_eval,
+                                       rtol=1e-9, atol=1e-30)
+        if not success or np.allclose(trajectory[-1], 0.0):
+            raise RuntimeError(
+                f"Integration failed for system '{system_type}' "
+                f"(both DOP853 and LSODA)."
+            )
+        return trajectory
+
     @staticmethod
-    def warmup():
-        """Pre-compile DAPyr JIT kernels for all supported systems in background threads."""
+    def warmup(blocking=False):
+        """Pre-compile DAPyr JIT kernels for all supported systems in background threads.
+
+        Parameters
+        ----------
+        blocking : bool
+            If True, wait for all compilations to finish before returning.
+
+        Returns
+        -------
+        list[threading.Thread]
+            The warmup threads (useful for joining later).
+        """
         import threading
 
         def _compile(sys_type, x0, params):
@@ -123,3 +176,7 @@ class LorenzSystems:
         ]
         for j in jobs:
             j.start()
+        if blocking:
+            for j in jobs:
+                j.join()
+        return jobs
