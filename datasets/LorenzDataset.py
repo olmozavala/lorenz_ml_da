@@ -39,7 +39,8 @@ class LorenzDataset(Dataset):
         def _generate_single_trajectory():
             if x0 is None or num_start_locations > 1:
                 if system_type == '63':
-                    current_x0 = np.random.normal(0, 10, nx)
+                    #current_x0 = np.random.normal(0, 10, nx)
+                    current_x0 = np.ones(3) + std * np.random.randn(3)
                 else:
                     center = _SYSTEM_IC_CENTER[system_type]
                     current_x0 = np.ones(nx) * center + np.random.normal(0, std, nx)
@@ -53,7 +54,7 @@ class LorenzDataset(Dataset):
 
             nt_truth = Ns * save_Dt + save_Dt
 
-            print(f"Generating {system_type} trajectory...")
+            print(f"Generating {system_type} trajectory, x0 = {current_x0}")
             x_truth = LorenzSystems.generate_trajectory_fast(
                 system_type, current_x0, dt, nt_truth, **system_params
             )

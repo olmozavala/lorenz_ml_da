@@ -160,6 +160,7 @@ dmypy.json
 cython_debug/
 .claude/
 *.npz
+evidence/
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
