@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+torch.set_default_dtype(torch.float64)
+
 
 class DenseNN(nn.Module):
     """

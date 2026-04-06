@@ -10,6 +10,8 @@ from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN, ESN, save_model
 from Training import train_model, train_esn_ridge, EarlyStopping
 
+torch.set_default_dtype(torch.float64)
+
 
 def load_config(config_path='config.yml'):
     with open(config_path, 'r') as f:

@@ -171,11 +171,12 @@ class LorenzDataset(Dataset):
 
     def __getitem__(self, idx):
         i = self._valid_indices[idx]
+        dt = torch.get_default_dtype()
         input_seq = torch.tensor(
-            self.data[i - self.prev_time_steps : i].flatten(), dtype=torch.float32
+            self.data[i - self.prev_time_steps : i].flatten(), dtype=dt
         )
         targets = torch.tensor(
-            self.target[i - 1 : i - 1 + self._MAX_FUTURE], dtype=torch.float32
+            self.target[i - 1 : i - 1 + self._MAX_FUTURE], dtype=dt
         )
         return input_seq, targets
 

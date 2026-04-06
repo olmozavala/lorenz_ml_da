@@ -3,9 +3,9 @@
 # All keys here map 1-to-1 with the sidebar of 1_SingleMLTraining.py.
 
 dataset:
-  system_type: '63'          # '63' (L63) | '96' (L96, N=40) | '05' (L05 Model III, N=480)
+  system_type: '05'          # '63' (L63) | '96' (L96, N=40) | '05' (L05 Model III, N=480)
   dt: 0.001                  # integration time step
-  ns: 100000                 # samples per start location (Ns)
+  ns: 50000                 # samples per start location (Ns)
   save_dt: 10                # subsampling factor  →  effective Δt = dt × save_dt
   std: 1.0                   # observation noise std  (0 = clean trajectories)
   prev_time_steps: 4         # history window size fed to the model
@@ -18,12 +18,12 @@ dataset:
   system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
 
 model:
-  type: 'RNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN' | 'ESN'
+  type: 'LSTMNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN' | 'ESN'
   # 64, 64, 32 is a good configuration for L63
   hidden_layers: [64, 64, 32]
   hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
   output_activation: null
-  rnn_nonlinearity: 'tanh'   # RNN only: 'tanh' | 'relu'
+  rnn_nonlinearity: 'relu'   # RNN only: 'tanh' | 'relu'
 
   # ESN-specific (only used when type='ESN'; hidden_layers[0] = reservoir_size)
   esn_params:
