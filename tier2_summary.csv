@@ -1,7 +1,0 @@
-model,peak_spread_pct,spread_at_obs1,collapse_time_LT,peak_time_LT,mean_sigma_rmse_ratio,rank_hist_shape
-Truth,95.5,0.09201,1.0691,8.7157,2.662,U-shape
-DenseNN,93.65,0.090271,1.0419,8.0,1.4788,U-shape
-ResDenseNN,95.31,0.097152,1.0238,8.7791,2.1581,U-shape
-LSTMNN,93.82,0.090322,1.0691,8.0181,1.9616,U-shape
-RNN_relu,93.97,0.091493,1.0147,8.0453,0.8326,U-shape
-RNN_tanh,94.27,0.090968,1.0691,8.7338,1.3672,U-shape
