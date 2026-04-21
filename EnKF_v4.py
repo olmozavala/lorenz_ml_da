@@ -81,13 +81,13 @@ np.random.seed(10)
 spinup_steps = 2000
 x0 = np.random.randn(3).astype(np.float64)
 dt = 0.01
+d0 = 1.0 # perturbation amplitude
 n_steps = len(np.arange(0, 30, dt))
 
 traj = LorenzSystems.generate_trajectory_fast('63', x0, dt, spinup_steps + 1)
 xt_init = traj[-1, :]  # on the attractor after spin-up
 
 # Create a perturbed initial condition and propagate both
-d0 = 0.05
 xp_init = xt_init + d0 * np.random.randn(3)
 
 # Propagate both to build an initial ensemble pool
@@ -196,12 +196,12 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
     Returns
     -------
     dict with keys:
-        'errorf'  : np.ndarray (T,)  – forecast RMSE per cycle
-        'errora'  : np.ndarray (T,)  – analysis RMSE per cycle
-        'spread'  : np.ndarray (T,)  – ensemble spread per cycle
-        'xt_traj' : np.ndarray (T, Nx) – true state at each cycle
-        'xf_traj' : np.ndarray (T, Nx) – forecast mean at each cycle
-        'xa_traj' : np.ndarray (T, Nx) – analysis mean at each cycle
+        'errorf'  : np.ndarray (T,)  - forecast RMSE per cycle
+        'errora'  : np.ndarray (T,)  - analysis RMSE per cycle
+        'spread'  : np.ndarray (T,)  - ensemble spread per cycle
+        'xt_traj' : np.ndarray (T, Nx) - true state at each cycle
+        'xf_traj' : np.ndarray (T, Nx) - forecast mean at each cycle
+        'xa_traj' : np.ndarray (T, Nx) - analysis mean at each cycle
     """
     cfg = config
     np.random.seed(cfg.seed)
@@ -296,11 +296,11 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
 # --- Experiment configuration ---
 cfg = EnKFConfig(
     T=50,
-    M=500,
+    M=100,
     Ne=50,
     dt=0.01,
     p=0.4,
-    sig_obs=2.1,
+    sig_obs=1.1,
     use_localization=False,   # toggle localization
     loc_radius=3.0,           # adjust radius
     use_inflation=False,      # toggle inflation
@@ -374,8 +374,10 @@ axes[1].grid(True, alpha=0.3)
 
 loc_str = f"Loc r={cfg.loc_radius}" if cfg.use_localization else "No Loc"
 infl_str = f"Infl λ={cfg.infl_factor}" if cfg.use_inflation else "No Infl"
-fig.suptitle(f'EnKF Architecture Comparison  |  {loc_str}  |  {infl_str}  |  Ne={cfg.Ne}', fontsize=13)
+obs_str = f"Obs p={cfg.p}" if cfg.p != 1.0 else "Obs All"
+fig.suptitle(f'EnKF Architecture Comparison  |  {loc_str}  |  {infl_str}  |  Ne={cfg.Ne} | {obs_str}, Obs_err={cfg.sig_obs}, Steps={cfg.M}', fontsize=13)
 plt.tight_layout()
+plt.savefig(f'outputs/EnKF_Architecture_Comparison_p{cfg.p}_sig_obs{cfg.sig_obs}_M{cfg.M}_Ne{cfg.Ne}.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # 2. Ensemble spread comparison
@@ -392,6 +394,7 @@ ax.set_ylabel('Mean Std across State Variables')
 ax.legend()
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
+plt.savefig(f'outputs/EnKF_Ensemble_Spread_p{cfg.p}_sig_obs{cfg.sig_obs}_M{cfg.M}_Ne{cfg.Ne}.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # 3. Summary bar chart: mean RMSE over all cycles
@@ -414,6 +417,7 @@ ax.set_title('Mean RMSE by Architecture')
 ax.legend()
 ax.grid(True, alpha=0.3, axis='y')
 plt.tight_layout()
+plt.savefig(f'outputs/EnKF_Mean_RMSE_p{cfg.p}_sig_obs{cfg.sig_obs}_M{cfg.M}_Ne{cfg.Ne}.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # %%

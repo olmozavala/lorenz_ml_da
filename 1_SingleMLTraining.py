@@ -19,6 +19,7 @@ import sys
 import traceback
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
+torch.set_default_dtype(torch.float64)
 
 # Limit PyTorch internal threads; parallelism is managed by ThreadPoolExecutor.
 torch.set_num_threads(1)
@@ -675,7 +676,7 @@ def _eval_thread_func(config):
         all_hists = np.stack([t[:prev_steps] for t in truth_trajs])
         hists_norm = (all_hists - mean) / std
         input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1),
-                                  dtype=torch.float32).to(device)
+                                  dtype=torch.float64).to(device)
 
         with torch.inference_mode():
             preds_norm = recursive_rollout(model, input_seqs,

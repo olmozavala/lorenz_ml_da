@@ -11,8 +11,8 @@ from lorenz.lorenz_systems import LorenzSystems
 torch.set_default_dtype(torch.float64)
 
 model_dir = "models"
-def init_models(n_steps):
-    if n_steps == 1:
+def init_models(n_steps, model_class='L63'):
+    if n_steps == 1 and model_class == '63':
         print("Initializing single time step models")
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
@@ -21,7 +21,7 @@ def init_models(n_steps):
             'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1775269773_best_model.pth'),
             'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775269849_best_model.pth'),
         }
-    elif n_steps == 4:
+    elif n_steps == 4 and model_class == '63':
         print("Initializing 4 time step models")
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1774989212_best_model.pth'),
@@ -30,8 +30,18 @@ def init_models(n_steps):
             'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1774989331_best_model.pth'),
             'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775047936_best_model.pth'),
         }
+    elif n_steps == 1 and model_class == '05':
+        print("Initializing 1 time step models for L05")
+        model_paths = {
+            'DenseNN': join(model_dir, 'DenseNN_L05_trial1_1775594112_best_model.pth'),
+            'ResDenseNN': join(model_dir, 'ResDenseNN_L05_trial1_1775594169_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L05_trial1_1775588415_best_model.pth'),
+            'RNN_tanh': join(model_dir,  'RNN_L63_trial1_1775269773_best_model.pth'),
+            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775269773_best_model.pth')
+        }
+
     else:
-        raise ValueError(f"Invalid number of steps: {n_steps}")
+        raise ValueError(f"Invalid number of steps: {n_steps} or model class: {model_class}")
 
     surrogates_palette = {
         'Truth': '#000000',
@@ -52,26 +62,30 @@ def init_models(n_steps):
 
     return surrogates, surrogates_palette
 
-surrogates, surrogates_palette = init_models(1)
+
+model_class = '05'
+n_steps = 1
+surrogates, surrogates_palette = init_models(n_steps, model_class=model_class)
 
 VAR_NAMES = ['x', 'y', 'z']
 model_name = 'DenseNN'
+
 np.random.seed(10)
 spinup_steps = 2000
-x0 = np.random.randn(3).astype(np.float64)
+x0 = np.random.randn(480).astype(np.float64)
 dt = 0.01
 n_steps = len(np.arange(0, 30, dt))
 
-x = LorenzSystems.generate_trajectory_fast('63', x0, dt, spinup_steps+1)
+x = LorenzSystems.generate_trajectory_fast(model_class, x0, dt, spinup_steps+1)
 x = x[1:,:]
 xt = x[-1,:]
 
 # True and perturbed trajectories
-d0 = 0.05 # perturbation amplitude
-xp = xt + d0 * np.random.randn(3)
+d0 = 0.1 # perturbation amplitude
+xp = xt + d0 * np.random.randn(480)
 
 # Propagate perturbed trajectory
-x = LorenzSystems.generate_trajectory_fast('63', xp, dt, n_steps+1)
+x = LorenzSystems.generate_trajectory_fast(model_class, xp, dt, n_steps+1)
 x = x[1:,:] # Remove initial condition
 # Propagate perturbed trajectory with surrogate model
 xss = surrogates[model_name].rollout(torch.tensor(xp), num_steps=n_steps)
@@ -80,7 +94,7 @@ xps = xss[-1,:] # Last state Surrogate perturbed
 xp = x[-1,:] # Last state Lorenz perturbed
 
 # Propagate true trajectory with both Lorenz and surrogate models
-xs = LorenzSystems.generate_trajectory_fast('63', xt, dt, n_steps+1)
+xs = LorenzSystems.generate_trajectory_fast(model_class, xt, dt, n_steps+1)
 xs = xs[1:,:]
 xts = surrogates[model_name].rollout(torch.tensor(xt), num_steps=n_steps)
 
@@ -103,8 +117,8 @@ plt.show()
 
 # %% Initialize ensemble
 Ne_total = 100 # ensemble size
-d0 = 0.05 # perturbation amplitude
-Nx = 3 # number of state variables
+d0 = 1.0 # perturbation amplitude
+Nx = 480 # number of state variables
 
 ### Initial ensemble
 ones = np.ones(Ne_total)
@@ -123,7 +137,7 @@ for e in range(0,Ne_total): # loop over ensemble and propagate each member
     Xf[e,:] = sol[-1,:]; # sol[-1,:] = last time only, all state vars
 
 ### Propagate true state
-xSt = LorenzSystems.generate_trajectory_fast('63', xt, dt, M+1)
+xSt = LorenzSystems.generate_trajectory_fast(model_class, xt, dt, M+1)
 xSt = xSt[1:,:]
 xt = xSt[-1,:] # last time only, all state vars
 
@@ -173,17 +187,17 @@ for r in (2,5,10):
 
 np.random.seed(seed=10) # to ensure results are reproducible
 time_step = 0.01 # dt for numerical integration
-p = 1 # fraction of the directly observed state variables
+p = 1.0 # fraction of the directly observed state variables
 T = 50 # number of time steps to simulate (not the absolute time)
 errorf_k = np.zeros(T) # array to store the forecast errors
 errora_k = np.zeros(T) # array to store the analysis errors
 I = np.eye(Nx,Nx) # identity matrix
-Ne = 20 # the ensemble size we will use in this experiment
+Ne = 50 # the ensemble size we will use in this experiment
 ones = np.ones(Ne) # a vector of 1s, to be used later in creating
                     # the full ensemble matrices
-loc = 3 # localization radius to be used in this experiment
-infl = 1.02 # inflation factor to be used in this experiment
-M = 50 # number of time steps run before assimilation window
+loc = 2 # localization radius to be used in this experiment
+infl = 1.03 # inflation factor to be used in this experiment
+M = 1 # number of time steps run before assimilation window
 
 ### Initial true state and ensemble
 xt_k = xt.copy() # this is the last true state from the
@@ -194,7 +208,7 @@ Xf_k = Xf[ind,:].copy().T
 ### Observation-related variables
 Ny = int(round(p*Nx)) # number of observations
 sig_obs = 1.1 # ob error std
-R_k = (sig_obs**2)*np.eye(Ny,Ny) # ob error covariance matric
+R_k = (sig_obs**2)*np.eye(Ny,Ny) # ob error covariance matrix
 
 ### Loop over time and assimilate observations (when present)
 for k in range(0,T):
@@ -243,7 +257,7 @@ for k in range(0,T):
     for e in range(0,Ne):
         Xa_e_S = surrogates[model_name].rollout(Xa_k[:,e], num_steps=M)
         Xf_k[:,e] = Xa_e_S[-1,:]
-    xt_S = LorenzSystems.generate_trajectory_fast('63', xt_k, dt, M+1)
+    xt_S = LorenzSystems.generate_trajectory_fast(model_class, xt_k, dt, M+1)
     xt_k = xt_S[-1,:]
 
 # Plot forecast and analysis errors at each cycle

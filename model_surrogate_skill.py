@@ -205,9 +205,9 @@ def kstep_rmse(model, traj, K, n_ics=500, stride=40):
     return rmse
 
 ## All variables
-test_traj = torch.tensor(true_traj)
+test_traj = torch.tensor(true_traj[1:])
 K = 50  # 50 steps = 0.5 time units at dt=0.01 ≈ 0.45 Lyapunov times
-K = 200
+K = 500
 rmse_mlp  = kstep_rmse(surrogates['DenseNN'],  test_traj, K, stride=200)
 rmse_lstm = kstep_rmse(surrogates['LSTMNN'], test_traj, K, stride=200)
 rmse_rnn_tanh = kstep_rmse(surrogates['RNN_tanh'], test_traj, K, stride=200)
@@ -230,8 +230,8 @@ ax.semilogy(lyapunov_times, rmse_rnn_tanh,  label='RNN_tanh',  color=surrogates_
 ax.axhline(clim_rmse, ls='--', color='gray', lw=0.8, label=f'Climatology {clim_rmse:.2f}')
 
 # Mark your DA obs frequency (every 8 steps = 0.08 tu = 0.073 LT)
-ax.axvline(8 * 0.01 * 0.906, ls=':', color='black', lw=0.8, 
-           label='Obs interval (8 steps)')
+ax.axvline(10 * 0.01 * 0.906, ls=':', color='black', lw=0.8, 
+           label='Obs interval (10 steps)')
 
 ax.set_xlabel('Lyapunov times')
 ax.set_ylabel('RMSE (log scale)')

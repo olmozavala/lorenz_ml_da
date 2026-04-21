@@ -1,0 +1,315 @@
+Initializing single time step models
+  Ensemble pool ready for DenseNN
+  Ensemble pool ready for ResDenseNN
+  Ensemble pool ready for LSTMNN
+  Ensemble pool ready for RNN_relu
+  Ensemble pool ready for RNN_tanh
+  Ensemble pool ready for Lorenz63 (baseline)
+
+============================================================
+BENCHMARK 1: Baseline (reference conditions)
+============================================================
+  Lorenz63    | fRMSE=1.349  aRMSE=0.659  spread=1.259  div=False
+  DenseNN      | fRMSE=1.002  aRMSE=0.684  spread=1.437  div=False
+  ResDenseNN   | fRMSE=0.973  aRMSE=0.654  spread=1.343  div=False
+  LSTMNN       | fRMSE=0.938  aRMSE=0.660  spread=1.130  div=False
+  RNN_relu     | fRMSE=0.860  aRMSE=0.673  spread=1.185  div=False
+  RNN_tanh     | fRMSE=0.882  aRMSE=0.658  spread=1.304  div=False
+
+BENCHMARK 1 — Baseline Summary (T=10, M=10, Ne=20, p=1.0, σ=1.0)
+     Model  fRMSE  aRMSE  Spread  Spread/fRMSE  Valid_cycles  Diverged
+  Lorenz63 1.3494 0.6590  1.2590        0.9330            10     False
+   DenseNN 1.0022 0.6841  1.4370        1.4338            10     False
+ResDenseNN 0.9727 0.6543  1.3433        1.3810            10     False
+    LSTMNN 0.9375 0.6603  1.1299        1.2052            10     False
+  RNN_relu 0.8601 0.6725  1.1852        1.3779            10     False
+  RNN_tanh 0.8818 0.6578  1.3043        1.4791            10     False
+  [saved: figures/000_rmse_comparison.png]
+  [saved: figures/001_spread_comparison.png]
+  [saved: figures/002_spaghetti_multi_x.png]
+  [saved: figures/003_spaghetti_multi_y.png]
+  [saved: figures/004_spaghetti_multi_z.png]
+  [saved: figures/005_spread_reduction_multi.png]
+
+============================================================
+BENCHMARK 2: Forecast window sweep (M)
+============================================================
+
+--- M = 5 ---
+  Lorenz63    | fRMSE=0.534  aRMSE=0.327  spread=0.423  div=False
+  DenseNN      | fRMSE=0.536  aRMSE=0.392  spread=0.463  div=False
+  ResDenseNN   | fRMSE=0.482  aRMSE=0.346  spread=0.445  div=False
+  LSTMNN       | fRMSE=0.544  aRMSE=0.406  spread=0.406  div=False
+  RNN_relu     | fRMSE=0.504  aRMSE=0.392  spread=0.417  div=False
+  RNN_tanh     | fRMSE=0.527  aRMSE=0.407  spread=0.430  div=False
+
+--- M = 10 ---
+  Lorenz63    | fRMSE=0.614  aRMSE=0.376  spread=0.529  div=False
+  DenseNN      | fRMSE=0.540  aRMSE=0.373  spread=0.555  div=False
+  ResDenseNN   | fRMSE=0.565  aRMSE=0.386  spread=0.548  div=False
+  LSTMNN       | fRMSE=0.515  aRMSE=0.361  spread=0.508  div=False
+  RNN_relu     | fRMSE=0.700  aRMSE=0.482  spread=0.528  div=False
+  RNN_tanh     | fRMSE=0.582  aRMSE=0.404  spread=0.539  div=False
+
+--- M = 20 ---
+  Lorenz63    | fRMSE=0.798  aRMSE=0.423  spread=0.786  div=False
+  DenseNN      | fRMSE=1.030  aRMSE=0.530  spread=0.806  div=False
+  ResDenseNN   | fRMSE=0.862  aRMSE=0.494  spread=0.848  div=False
+  LSTMNN       | fRMSE=0.801  aRMSE=0.473  spread=0.821  div=False
+  RNN_relu     | fRMSE=0.873  aRMSE=0.486  spread=0.815  div=False
+  RNN_tanh     | fRMSE=0.766  aRMSE=0.480  spread=0.838  div=False
+
+--- M = 40 ---
+  Lorenz63    | fRMSE=3.291  aRMSE=0.862  spread=1.883  div=False
+  DenseNN      | fRMSE=3.393  aRMSE=0.869  spread=1.938  div=False
+  ResDenseNN   | fRMSE=3.319  aRMSE=0.857  spread=1.742  div=False
+  LSTMNN       | fRMSE=3.383  aRMSE=0.921  spread=1.686  div=False
+  RNN_relu     | fRMSE=3.604  aRMSE=0.944  spread=1.880  div=False
+  RNN_tanh     | fRMSE=3.195  aRMSE=0.794  spread=1.737  div=False
+
+--- M = 50 ---
+  Lorenz63    | fRMSE=6.012  aRMSE=2.026  spread=2.365  div=False
+  DenseNN      | fRMSE=4.106  aRMSE=1.020  spread=2.569  div=False
+  ResDenseNN   | fRMSE=4.169  aRMSE=1.134  spread=2.366  div=False
+  LSTMNN       | fRMSE=4.658  aRMSE=1.278  spread=2.312  div=False
+  RNN_relu     | fRMSE=4.820  aRMSE=1.528  spread=2.186  div=False
+  RNN_tanh     | fRMSE=4.176  aRMSE=1.035  spread=2.448  div=False
+
+--- M = 100 ---
+  Lorenz63    | fRMSE=8.390  aRMSE=2.220  spread=3.711  div=False
+  DenseNN      | fRMSE=8.654  aRMSE=3.084  spread=3.630  div=False
+  ResDenseNN   | fRMSE=8.097  aRMSE=2.348  spread=3.537  div=False
+  LSTMNN       | fRMSE=8.098  aRMSE=2.642  spread=3.347  div=False
+  RNN_relu     | fRMSE=10.053  aRMSE=3.606  spread=3.734  div=False
+  RNN_tanh     | fRMSE=7.810  aRMSE=2.515  spread=3.617  div=False
+  [saved: figures/006_b2_M_sweep.png]
+
+BENCHMARK 2 — Mean aRMSE by model and forecast window M:
+     Model    M=5   M=10   M=20   M=40   M=50  M=100
+  Lorenz63 0.3272 0.3756 0.4226 0.8618 2.0256 2.2205
+   DenseNN 0.3918 0.3732 0.5301 0.8686 1.0203 3.0840
+ResDenseNN 0.3463 0.3860 0.4939 0.8572 1.1342 2.3485
+    LSTMNN 0.4059 0.3611 0.4727 0.9214 1.2784 2.6417
+  RNN_relu 0.3919 0.4822 0.4861 0.9439 1.5282 3.6058
+  RNN_tanh 0.4074 0.4041 0.4800 0.7943 1.0349 2.5149
+
+BENCHMARK 2 — Mean Spread by model and forecast window M:
+     Model    M=5   M=10   M=20   M=40   M=50  M=100
+  Lorenz63 0.4226 0.5293 0.7855 1.8831 2.3647 3.7106
+   DenseNN 0.4630 0.5554 0.8064 1.9378 2.5695 3.6300
+ResDenseNN 0.4450 0.5483 0.8480 1.7417 2.3655 3.5372
+    LSTMNN 0.4058 0.5076 0.8208 1.6857 2.3119 3.3471
+  RNN_relu 0.4171 0.5282 0.8147 1.8804 2.1857 3.7337
+  RNN_tanh 0.4304 0.5392 0.8376 1.7366 2.4480 3.6167
+
+BENCHMARK 2 — Diverged per model and forecast window M:
+     Model   M=5  M=10  M=20  M=40  M=50  M=100
+  Lorenz63 False False False False False  False
+   DenseNN False False False False False  False
+ResDenseNN False False False False False  False
+    LSTMNN False False False False False  False
+  RNN_relu False False False False False  False
+  RNN_tanh False False False False False  False
+  [saved: figures/007_spread_reduction_multi.png]
+  [saved: figures/008_spaghetti_multi_x.png]
+  [saved: figures/009_spaghetti_multi_y.png]
+  [saved: figures/010_spaghetti_multi_z.png]
+
+============================================================
+BENCHMARK 3: Ensemble size sweep (Ne)
+============================================================
+
+--- Ne = 5 ---
+  Lorenz63    | fRMSE=0.749  aRMSE=0.517  spread=0.424  div=False
+  DenseNN      | fRMSE=0.607  aRMSE=0.409  spread=0.535  div=False
+  ResDenseNN   | fRMSE=0.606  aRMSE=0.431  spread=0.438  div=False
+  LSTMNN       | fRMSE=0.664  aRMSE=0.496  spread=0.423  div=False
+  RNN_relu     | fRMSE=1.030  aRMSE=0.689  spread=0.442  div=False
+  RNN_tanh     | fRMSE=0.613  aRMSE=0.416  spread=0.459  div=False
+
+--- Ne = 10 ---
+  Lorenz63    | fRMSE=0.521  aRMSE=0.363  spread=0.510  div=False
+  DenseNN      | fRMSE=0.586  aRMSE=0.393  spread=0.557  div=False
+  ResDenseNN   | fRMSE=0.590  aRMSE=0.388  spread=0.537  div=False
+  LSTMNN       | fRMSE=0.503  aRMSE=0.370  spread=0.484  div=False
+  RNN_relu     | fRMSE=0.798  aRMSE=0.531  spread=0.533  div=False
+  RNN_tanh     | fRMSE=0.644  aRMSE=0.405  spread=0.499  div=False
+
+--- Ne = 20 ---
+  Lorenz63    | fRMSE=0.614  aRMSE=0.376  spread=0.529  div=False
+  DenseNN      | fRMSE=0.540  aRMSE=0.373  spread=0.555  div=False
+  ResDenseNN   | fRMSE=0.565  aRMSE=0.386  spread=0.548  div=False
+  LSTMNN       | fRMSE=0.515  aRMSE=0.361  spread=0.508  div=False
+  RNN_relu     | fRMSE=0.700  aRMSE=0.482  spread=0.528  div=False
+  RNN_tanh     | fRMSE=0.582  aRMSE=0.404  spread=0.539  div=False
+
+--- Ne = 50 ---
+  Lorenz63    | fRMSE=0.588  aRMSE=0.385  spread=0.534  div=False
+  DenseNN      | fRMSE=0.570  aRMSE=0.376  spread=0.544  div=False
+  ResDenseNN   | fRMSE=0.571  aRMSE=0.383  spread=0.563  div=False
+  LSTMNN       | fRMSE=0.537  aRMSE=0.386  spread=0.531  div=False
+  RNN_relu     | fRMSE=0.690  aRMSE=0.482  spread=0.544  div=False
+  RNN_tanh     | fRMSE=0.566  aRMSE=0.385  spread=0.544  div=False
+  [saved: figures/011_b3_Ne_sweep.png]
+
+BENCHMARK 3 — Mean aRMSE by model and ensemble size Ne:
+     Model   Ne=5  Ne=10  Ne=20  Ne=50
+  Lorenz63 0.5168 0.3631 0.3756 0.3854
+   DenseNN 0.4089 0.3929 0.3732 0.3756
+ResDenseNN 0.4313 0.3880 0.3860 0.3827
+    LSTMNN 0.4955 0.3703 0.3611 0.3865
+  RNN_relu 0.6886 0.5309 0.4822 0.4822
+  RNN_tanh 0.4163 0.4053 0.4041 0.3852
+
+BENCHMARK 3 — Mean Spread by model and ensemble size Ne:
+     Model   Ne=5  Ne=10  Ne=20  Ne=50
+  Lorenz63 0.4239 0.5096 0.5293 0.5345
+   DenseNN 0.5348 0.5574 0.5554 0.5436
+ResDenseNN 0.4384 0.5372 0.5483 0.5627
+    LSTMNN 0.4232 0.4837 0.5076 0.5307
+  RNN_relu 0.4424 0.5332 0.5282 0.5445
+  RNN_tanh 0.4586 0.4993 0.5392 0.5444
+  [saved: figures/012_spread_reduction_multi.png]
+  [saved: figures/013_spaghetti_multi_x.png]
+  [saved: figures/014_spaghetti_multi_y.png]
+  [saved: figures/015_spaghetti_multi_z.png]
+
+============================================================
+BENCHMARK 4: Observation sparsity sweep (p)
+============================================================
+
+--- p = 1.0 (Ny = 3) ---
+  Lorenz63    | fRMSE=0.614  aRMSE=0.376  spread=0.529  div=False
+  DenseNN      | fRMSE=0.540  aRMSE=0.373  spread=0.555  div=False
+  ResDenseNN   | fRMSE=0.565  aRMSE=0.386  spread=0.548  div=False
+  LSTMNN       | fRMSE=0.515  aRMSE=0.361  spread=0.508  div=False
+  RNN_relu     | fRMSE=0.700  aRMSE=0.482  spread=0.528  div=False
+  RNN_tanh     | fRMSE=0.582  aRMSE=0.404  spread=0.539  div=False
+
+--- p = 0.67 (Ny = 2) ---
+  Lorenz63    | fRMSE=1.102  aRMSE=0.744  spread=0.680  div=False
+  DenseNN      | fRMSE=1.084  aRMSE=0.822  spread=0.683  div=False
+  ResDenseNN   | fRMSE=1.123  aRMSE=0.818  spread=0.721  div=False
+  LSTMNN       | fRMSE=1.060  aRMSE=0.770  spread=0.663  div=False
+  RNN_relu     | fRMSE=0.950  aRMSE=0.695  spread=0.669  div=False
+  RNN_tanh     | fRMSE=0.965  aRMSE=0.708  spread=0.688  div=False
+
+--- p = 0.33 (Ny = 1) ---
+  Lorenz63    | fRMSE=1.886  aRMSE=1.405  spread=1.119  div=False
+  DenseNN      | fRMSE=1.418  aRMSE=1.066  spread=1.108  div=False
+  ResDenseNN   | fRMSE=2.334  aRMSE=1.914  spread=1.175  div=False
+  LSTMNN       | fRMSE=1.359  aRMSE=1.051  spread=1.104  div=False
+  RNN_relu     | fRMSE=1.964  aRMSE=1.533  spread=1.080  div=False
+  RNN_tanh     | fRMSE=1.132  aRMSE=0.895  spread=1.067  div=False
+  [saved: figures/016_b4_p_sweep.png]
+
+BENCHMARK 4 — Mean aRMSE by model and observation fraction p:
+     Model  p=1.0  p=0.67  p=0.33
+  Lorenz63 0.3756  0.7441  1.4049
+   DenseNN 0.3732  0.8221  1.0656
+ResDenseNN 0.3860  0.8175  1.9145
+    LSTMNN 0.3611  0.7701  1.0510
+  RNN_relu 0.4822  0.6946  1.5330
+  RNN_tanh 0.4041  0.7084  0.8949
+
+BENCHMARK 4 — Mean Spread by model and observation fraction p:
+     Model  p=1.0  p=0.67  p=0.33
+  Lorenz63 0.5293  0.6803  1.1195
+   DenseNN 0.5554  0.6833  1.1082
+ResDenseNN 0.5483  0.7209  1.1748
+    LSTMNN 0.5076  0.6628  1.1035
+  RNN_relu 0.5282  0.6689  1.0800
+  RNN_tanh 0.5392  0.6884  1.0667
+  [saved: figures/017_spread_reduction_multi.png]
+  [saved: figures/018_spaghetti_multi_x.png]
+  [saved: figures/019_spaghetti_multi_y.png]
+  [saved: figures/020_spaghetti_multi_z.png]
+
+============================================================
+BENCHMARK 5: Observation noise sweep (sig_obs)
+============================================================
+
+--- sig_obs = 0.1 ---
+  Lorenz63    | fRMSE=0.199  aRMSE=0.036  spread=0.181  div=False
+  DenseNN      | fRMSE=0.249  aRMSE=0.130  spread=0.219  div=False
+  ResDenseNN   | fRMSE=0.163  aRMSE=0.062  spread=0.193  div=False
+  LSTMNN       | fRMSE=0.337  aRMSE=0.210  spread=0.154  div=False
+  RNN_relu     | fRMSE=0.576  aRMSE=0.433  spread=0.163  div=False
+  RNN_tanh     | fRMSE=0.336  aRMSE=0.218  spread=0.188  div=False
+
+--- sig_obs = 0.5 ---
+  Lorenz63    | fRMSE=0.384  aRMSE=0.186  spread=0.321  div=False
+  DenseNN      | fRMSE=0.333  aRMSE=0.216  spread=0.360  div=False
+  ResDenseNN   | fRMSE=0.339  aRMSE=0.197  spread=0.336  div=False
+  LSTMNN       | fRMSE=0.336  aRMSE=0.212  spread=0.299  div=False
+  RNN_relu     | fRMSE=0.559  aRMSE=0.381  spread=0.312  div=False
+  RNN_tanh     | fRMSE=0.371  aRMSE=0.249  spread=0.334  div=False
+
+--- sig_obs = 1.0 ---
+  Lorenz63    | fRMSE=0.614  aRMSE=0.376  spread=0.529  div=False
+  DenseNN      | fRMSE=0.540  aRMSE=0.373  spread=0.555  div=False
+  ResDenseNN   | fRMSE=0.565  aRMSE=0.386  spread=0.548  div=False
+  LSTMNN       | fRMSE=0.515  aRMSE=0.361  spread=0.508  div=False
+  RNN_relu     | fRMSE=0.700  aRMSE=0.482  spread=0.528  div=False
+  RNN_tanh     | fRMSE=0.582  aRMSE=0.404  spread=0.539  div=False
+
+--- sig_obs = 2.0 ---
+  Lorenz63    | fRMSE=1.195  aRMSE=0.877  spread=0.997  div=False
+  DenseNN      | fRMSE=1.026  aRMSE=0.785  spread=0.997  div=False
+  ResDenseNN   | fRMSE=1.100  aRMSE=0.817  spread=0.994  div=False
+  LSTMNN       | fRMSE=1.094  aRMSE=0.828  spread=0.970  div=False
+  RNN_relu     | fRMSE=1.113  aRMSE=0.831  spread=0.974  div=False
+  RNN_tanh     | fRMSE=1.028  aRMSE=0.781  spread=0.964  div=False
+
+--- sig_obs = 3.0 ---
+  Lorenz63    | fRMSE=2.174  aRMSE=1.639  spread=1.557  div=False
+  DenseNN      | fRMSE=1.892  aRMSE=1.525  spread=1.491  div=False
+  ResDenseNN   | fRMSE=1.921  aRMSE=1.485  spread=1.492  div=False
+  LSTMNN       | fRMSE=2.112  aRMSE=1.634  spread=1.496  div=False
+  RNN_relu     | fRMSE=1.734  aRMSE=1.338  spread=1.456  div=False
+  RNN_tanh     | fRMSE=1.755  aRMSE=1.399  spread=1.469  div=False
+  [saved: figures/021_b5_sig_sweep.png]
+
+BENCHMARK 5 — Mean aRMSE by model and observation noise σ_obs:
+     Model  σ=0.1  σ=0.5  σ=1.0  σ=2.0  σ=3.0
+  Lorenz63 0.0362 0.1863 0.3756 0.8768 1.6390
+   DenseNN 0.1301 0.2155 0.3732 0.7853 1.5254
+ResDenseNN 0.0621 0.1966 0.3860 0.8172 1.4848
+    LSTMNN 0.2099 0.2123 0.3611 0.8278 1.6338
+  RNN_relu 0.4329 0.3813 0.4822 0.8315 1.3384
+  RNN_tanh 0.2182 0.2491 0.4041 0.7809 1.3994
+
+BENCHMARK 5 — Mean Spread by model and observation noise σ_obs:
+     Model  σ=0.1  σ=0.5  σ=1.0  σ=2.0  σ=3.0
+  Lorenz63 0.1807 0.3205 0.5293 0.9970 1.5566
+   DenseNN 0.2186 0.3598 0.5554 0.9968 1.4910
+ResDenseNN 0.1929 0.3358 0.5483 0.9939 1.4921
+    LSTMNN 0.1539 0.2992 0.5076 0.9705 1.4955
+  RNN_relu 0.1633 0.3118 0.5282 0.9736 1.4558
+  RNN_tanh 0.1883 0.3336 0.5392 0.9642 1.4694
+
+============================================================
+ALL BENCHMARKS COMPLETE
+============================================================
+  [saved: figures/022_spread_reduction_multi.png]
+  [saved: figures/023_spaghetti_multi_x.png]
+  [saved: figures/024_spaghetti_multi_y.png]
+  [saved: figures/025_spaghetti_multi_z.png]
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1004: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[0].plot(M_values, frmse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1005: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[1].plot(M_values, armse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1086: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[0].plot(Ne_values, frmse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1087: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[1].plot(Ne_values, armse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1158: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[0].plot(p_values, frmse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1159: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[1].plot(p_values, armse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1224: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[0].plot(sig_values, frmse, 'o-', color=color, label=name, ls=ls)
+/home/jv24b/github/lorenz_ml_da/D_EnKF.py:1225: UserWarning: linestyle is redundantly defined by the 'linestyle' keyword argument and the fmt string "o-" (-> linestyle='-'). The keyword argument will take precedence.
+  axes[1].plot(sig_values, armse, 'o-', color=color, label=name, ls=ls)
+
+
