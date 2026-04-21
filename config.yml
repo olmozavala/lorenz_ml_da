@@ -18,20 +18,12 @@ dataset:
   system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
 
 model:
-  type: 'RNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN' | 'ESN'
+  type: 'RNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
   # 64, 64, 32 is a good configuration for L63
   hidden_layers: [1024, 1024, 512]
   hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
   output_activation: null
   rnn_nonlinearity: 'relu'   # RNN only: 'tanh' | 'relu'
-
-  # ESN-specific (only used when type='ESN'; hidden_layers[0] = reservoir_size)
-  esn_params:
-    spectral_radius: 0.95
-    sparsity: 0.9
-    leaking_rate: 0.3
-    input_scaling: 1.0
-    ridge_alpha: 1.0e-06
 
 training:
   num_epochs: 10000

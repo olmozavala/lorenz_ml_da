@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN, ESN
+from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN
 torch.set_default_dtype(torch.float64)
 
 _ACTIVATION_MAP = {
@@ -18,7 +18,7 @@ class SurrogateModel:
     """
     Generic loader and predictor for any pretrained Lorenz surrogate model.
 
-    Supports all five model types (DenseNN, ResDenseNN, LSTMNN, RNN, ESN)
+    Supports all four model types (DenseNN, ResDenseNN, LSTMNN, RNN)
     saved by Main_ML.py.  Handles normalisation internally so the public API
     operates entirely in physical space.
 
@@ -220,21 +220,10 @@ class SurrogateModel:
             return RNN(input_size, prev_time_steps, output_size,
                        hidden_size, num_layers, nonlinearity)
 
-        elif model_type == 'ESN':
-            esn = meta.get('esn_params', yml_meta.get('esn_params', {}))
-            return ESN(
-                input_size, prev_time_steps, output_size,
-                reservoir_size=hidden_layers[0],
-                spectral_radius=esn.get('spectral_radius', 0.95),
-                sparsity=esn.get('sparsity', 0.9),
-                leaking_rate=esn.get('leaking_rate', 0.3),
-                input_scaling=esn.get('input_scaling', 1.0),
-            )
-
         else:
             raise ValueError(
                 f"Unknown model type '{model_type}'. "
-                "Expected 'DenseNN', 'ResDenseNN', 'LSTMNN', 'RNN', or 'ESN'."
+                "Expected 'DenseNN', 'ResDenseNN', 'LSTMNN', or 'RNN'."
             )
 
     @staticmethod

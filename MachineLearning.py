@@ -144,62 +144,6 @@ class RNN(nn.Module):
         return self.fc(out[:, -1, :])
 
 
-class ESN(nn.Module):
-    """
-    Echo State Network: fixed random reservoir with trainable readout layer.
-
-    The reservoir (input-to-hidden and hidden-to-hidden weights) is randomly
-    initialised and kept fixed. Only the readout layer is trained, typically
-    via ridge regression (closed-form solution) rather than backpropagation.
-
-    The flattened input (batch, prev_time_steps * input_size) is reshaped to
-    (batch, prev_time_steps, input_size) and fed sequentially through the
-    reservoir with leaky integration.
-
-    Input shape:  (batch, input_size * prev_time_steps)
-    Output shape: (batch, output_size)
-    """
-    def __init__(self, input_size, prev_time_steps, output_size,
-                 reservoir_size, spectral_radius=0.95, sparsity=0.9,
-                 leaking_rate=0.3, input_scaling=1.0):
-        super(ESN, self).__init__()
-        self.input_size = input_size
-        self.prev_time_steps = prev_time_steps
-        self.reservoir_size = reservoir_size
-        self.leaking_rate = leaking_rate
-
-        # Fixed input-to-reservoir weights (buffer = saved but not optimised)
-        W_in = (torch.rand(reservoir_size, input_size) * 2 - 1) * input_scaling
-        self.register_buffer('W_in', W_in)
-
-        # Fixed sparse reservoir with spectral radius scaling
-        W_res = torch.rand(reservoir_size, reservoir_size) * 2 - 1
-        mask = (torch.rand(reservoir_size, reservoir_size) > sparsity).float()
-        W_res = W_res * mask
-        eigenvalues = torch.linalg.eigvals(W_res).abs()
-        if eigenvalues.max() > 0:
-            W_res = W_res * (spectral_radius / eigenvalues.max())
-        self.register_buffer('W_res', W_res)
-
-        # Readout layer (weights set by ridge regression)
-        self.readout = nn.Linear(reservoir_size, output_size)
-
-    def _run_reservoir(self, x):
-        """Run input sequence through reservoir, return final hidden state."""
-        x = x.view(-1, self.prev_time_steps, self.input_size)
-        batch_size = x.size(0)
-        h = torch.zeros(batch_size, self.reservoir_size, device=x.device)
-        for t in range(self.prev_time_steps):
-            u = x[:, t, :]  # (batch, input_size)
-            h_new = torch.tanh(u @ self.W_in.T + h @ self.W_res.T)
-            h = (1 - self.leaking_rate) * h + self.leaking_rate * h_new
-        return h
-
-    def forward(self, x):
-        h = self._run_reservoir(x)
-        return self.readout(h)
-
-
 def save_model(model, model_path, train_mean, train_std, architecture):
     """
     Saves a full checkpoint containing model weights, normalisation constants,
