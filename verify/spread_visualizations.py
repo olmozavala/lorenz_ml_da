@@ -64,10 +64,10 @@ VAR_NAMES = ['x', 'y', 'z']
 _SEED = 132
 np.random.seed(_SEED)
 
-Ne = 100
+Ne = 1000
 Nx = 3
 d0 = 0.01
-n_steps = 200
+n_steps = 2_000
 dt = 0.01
 time = np.arange(0, n_steps * dt + dt, dt)
 
@@ -98,15 +98,28 @@ lorenz_series = np.stack(lorenz_pools)
 print(f"Ensemble pool ready for Lorenz63 (baseline)")
     
 # %%
-fig, ax = plt.subplots(3, 1, figsize=(20, 10))
-model_type = 'ResDenseNN'
-for ii, var_name in enumerate(VAR_NAMES):
-    ax[ii].plot(surrogate_series[model_type][..., ii].T, color=surrogates_palette[model_type])
-    ax[ii].plot(lorenz_series[..., 1:, ii].T, color=surrogates_palette['Lorenz63'])
+for model_type in surrogates.keys():
+    fig, ax = plt.subplots(3, 1, figsize=(10, 12))
 
+    step_start = 0
+    step_limit = n_steps
+    for ii, var_name in enumerate(VAR_NAMES):
+        ax[ii].plot(time[step_start+1:step_limit+1], surrogate_series[model_type][:,step_start:step_limit, ii].T, color=surrogates_palette[model_type], 
+                    alpha=0.4, linewidth=0.5, zorder=2)
+        ax[ii].plot(time[step_start+1:step_limit+1], surrogate_series[model_type][:,step_start:step_limit, ii].T.mean(axis=1), color="red", 
+                    linewidth=2, label="Surrogate Mean", linestyle="--", alpha=0.7, zorder=10)
+        ax[ii].plot(time[step_start+1:step_limit+1], lorenz_series[:,step_start+1:step_limit+1, ii].T, color=surrogates_palette['Lorenz63'], 
+                    alpha=0.4, linewidth=0.5, zorder=1)
+        ax[ii].plot(time[step_start+1:step_limit+1], lorenz_series[:,step_start+1:step_limit+1, ii].T.mean(axis=1), color="blue", 
+                    linewidth=2, label="Lorenz Mean", linestyle="--", alpha=0.7, zorder=9)
+        ax[ii].legend()
+        ax[ii].set_xlabel('Time')
+        ax[ii].set_ylabel(var_name)
 
-    #ax[ii].legend()
-    #ax[ii].set_title(f'{var_name}')
-plt.tight_layout()
-plt.show()
+        fig.suptitle(f'{model_type}, Ne = {Ne}, perturbation amplitude = {d0}, time steps = {step_limit}')
+    plt.tight_layout()
+    plt.savefig(f'outputs/spread_visualizations_{model_type}_pert_{d0}_nsteps_{step_limit}.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    plt.close()
+    print(f'Saved spread_visualizations_{model_type}_pert_{d0}_nsteps_{step_limit}.png')
 # %%
