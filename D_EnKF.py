@@ -21,6 +21,13 @@ os.makedirs("figures", exist_ok=True)
 # Global figure counter for unique filenames
 _fig_count = [0]
 
+# Global configuration parameters
+_T = 300
+_M = 50
+_Ne = 20
+_CORE_SEED = 10
+_NE_MAX = 200
+
 def _savefig(label="fig"):
     """Save current figure to figures/ directory with a sequential counter prefix."""
     fname = f"figures/{_fig_count[0]:03d}_{label}.png"
@@ -120,9 +127,10 @@ def create_localization_matrix(r, n):
 # ============================================================
 # Spin-up: generate true initial condition on the attractor
 # ============================================================
-np.random.seed(10)
+np.random.seed(_CORE_SEED)
+Nx = 3
 spinup_steps = 2000
-x0 = np.random.randn(3).astype(np.float64)
+x0 = np.random.randn(Nx).astype(np.float64)
 dt = 0.01
 n_steps = len(np.arange(0, 10, dt))
 
@@ -131,7 +139,7 @@ xt_init = traj[-1, :]  # on the attractor after spin-up
 
 # Create a perturbed initial condition and propagate both
 d0 = 1.0
-xp_init = xt_init + d0 * np.random.randn(3)
+xp_init = xt_init + d0 * np.random.randn(Nx)
 
 # Propagate both to build an initial ensemble pool
 traj_true = LorenzSystems.generate_trajectory_fast('63', xt_init, dt, n_steps + 1)[1:, :]
@@ -141,15 +149,13 @@ xt = traj_true[-1, :]   # true state after propagation
 xp = traj_pert[-1, :]   # perturbed state after propagation
 
 # %% Build initial ensemble pool (propagated with each surrogate once)
-Ne_total = 50
-Nx = 3
+Ne_total = _NE_MAX
 
 # Ensemble centered on perturbed state
 Xf_pool = np.outer(np.ones(Ne_total), xp) + d0 * np.random.randn(Ne_total, Nx)
 
 # Propagate ensemble pool forward to decorrelate members
 M_spinup = len(np.arange(0, 10, dt))
-#M_spinup = 2
 
 # We store per-surrogate propagated pools so each architecture
 # starts from its own spun-up ensemble
@@ -337,25 +343,25 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
             # ========== Deterministic EnKF (ETKF) =========================
             # Ensemble anomalies (raw, not normalized)
             Xf_prime = Xf_k - np.outer(xf_k, ones)          # [Nx, Ne]
-
+ 
             # Project anomalies into observation space
             S_k = H_k @ Xf_prime                              # [Ny, Ne]
-
+ 
             # Ensemble-space analysis covariance
             R_inv = np.linalg.inv(R_k)
             C_k = (cfg.Ne - 1) * np.eye(cfg.Ne) + S_k.T @ R_inv @ S_k  # [Ne, Ne]
             C_inv = np.linalg.inv(C_k)
-
+ 
             # Mean update weights
             d_k = y_k - H_k @ xf_k                            # innovation [Ny,]
             w_bar = C_inv @ S_k.T @ R_inv @ d_k               # [Ne,]
-
+ 
             # Analysis mean
             xa_k_det = xf_k + Xf_prime @ w_bar
-
+ 
             # Perturbation update via symmetric matrix square root
             W_k = np.real(sqrtm((cfg.Ne - 1) * C_inv))        # [Ne, Ne]
-
+ 
             # Rebuild full analysis ensemble
             Xa_k = np.outer(xa_k_det, ones) + Xf_prime @ W_k
 
@@ -940,11 +946,10 @@ print("="*60)
 generic_inflation_factor = 1.05
 
 cfg_base = EnKFConfig(
-    T=50, M=10, Ne=20, dt=0.01,
+    T=_T, M=_M, Ne=_Ne, dt=0.01,
     p=1.0, sig_obs=1.0,
-    use_localization=False, use_inflation=False, infl_factor=generic_inflation_factor,
-    seed=10,
-    enkf_type='deterministic_',  # 'stochastic' or 'deterministic'
+    use_localization=False, use_inflation=False, seed=10,
+    enkf_type='deterministic',  # 'stochastic' or 'deterministic'
 )
 
 results_base = run_all_models(cfg_base, surrogates, Xf_pools, xt, surrogates_palette)
@@ -960,11 +965,11 @@ plot_spread_vs_rmse(results_base, surrogates_palette, cfg_base, f" — Baseline_
 # Spaghetti: compare all models for each variable
 for v in range(Nx):
     plot_ensemble_spaghetti_multi(results_base, surrogates_palette, cfg_base,
-                                  cycle_range=(0, 10), var_idx=v)
+                                  cycle_range=(35, 50), var_idx=v)
 
 # Detailed spaghetti + spread reduction for each architecture
 plot_spread_reduction_multi(results_base, surrogates_palette, cfg_base,
-                             cycle_range=(0, 10), var_idx=0)
+                             cycle_range=(35, 50), var_idx=0)
 #for name in results_base:
     #plot_ensemble_spaghetti(results_base[name], name, surrogates_palette, cfg_base,
     #                        cycle_range=(3, 8))
@@ -978,16 +983,15 @@ print("\n" + "="*60)
 print("BENCHMARK 2: Forecast window sweep (M)")
 print("="*60)
 
-M_values = [5, 10, 20, 50, 100, 200]
+M_values = [5, 10, 20, 40, 50, 100]
 bench_M = {}
 exp_M = {}
 for M_val in M_values:
     print(f"\n--- M = {M_val} ---")
     cfg_m = EnKFConfig(
-        T=50, M=M_val, Ne=20, dt=0.01,
+        T=_T, M=M_val, Ne=_Ne, dt=0.01,
         p=1.0, sig_obs=1.0,
         use_localization=False, use_inflation=False,
-        infl_factor=generic_inflation_factor,
         seed=10, enkf_type='deterministic',
     )
     bench_M[M_val] = run_all_models(cfg_m, surrogates, Xf_pools, xt, surrogates_palette)
@@ -1040,12 +1044,12 @@ print(pd.DataFrame(pivot_rows3).to_string(index=False))
 
 # Create spaghetti plots and spread reduction for the hardest M
 m_hard = M_values[-1]
-
+plot_rmse_comparison(bench_M[m_hard], surrogates_palette, exp_M[m_hard], f" — Large Forecast Window")
 plot_spread_reduction_multi(bench_M[m_hard], surrogates_palette, exp_M[m_hard],
-                             cycle_range=(0, 10), var_idx=0)
+                             cycle_range=(0, 50), var_idx=0)
 for v in range(Nx):
     plot_ensemble_spaghetti_multi(bench_M[m_hard], surrogates_palette, exp_M[m_hard],
-                                  cycle_range=(0, 5), var_idx=v)
+                                  cycle_range=(30, 50), var_idx=v)
 
 #for name in bench_M[m_hard]:
 #    plot_ensemble_spaghetti(bench_M[m_hard][name], name, surrogates_palette, exp_M[m_hard],
@@ -1061,16 +1065,15 @@ print("\n" + "="*60)
 print("BENCHMARK 3: Ensemble size sweep (Ne)")
 print("="*60)
 
-Ne_values = [5, 10, 20, 50]
+Ne_values = [5, 10, 20, 50, 100, 200]
 bench_Ne = {}
 exp_Ne = {}
 for Ne_val in Ne_values:
     print(f"\n--- Ne = {Ne_val} ---")
     cfg_ne = EnKFConfig(
-        T=50, M=50, Ne=Ne_val, dt=0.01,
+        T=_T, M=_M, Ne=Ne_val, dt=0.01,
         p=1.0, sig_obs=1.0,
         use_localization=False, use_inflation=False,
-        infl_factor=generic_inflation_factor,
         seed=10, enkf_type='deterministic',
     )
     bench_Ne[Ne_val] = run_all_models(cfg_ne, surrogates, Xf_pools, xt, surrogates_palette)
@@ -1139,10 +1142,9 @@ for p_val in p_values:
     Ny_actual = int(round(p_val * Nx))
     print(f"\n--- p = {p_val} (Ny = {Ny_actual}) ---")
     cfg_p = EnKFConfig(
-        T=50, M=50, Ne=20, dt=0.01,
+        T=_T, M=_M, Ne=_Ne, dt=0.01,
         p=p_val, sig_obs=1.0,
         use_localization=False, use_inflation=False,
-        infl_factor=generic_inflation_factor,
         seed=10, enkf_type='deterministic',
     )
     bench_p[p_val] = run_all_models(cfg_p, surrogates, Xf_pools, xt, surrogates_palette)
@@ -1185,6 +1187,7 @@ for name in all_names:
 print(pd.DataFrame(pivot_rows2).to_string(index=False))
 
 p_hard = p_values[-1]
+plot_rmse_comparison(bench_p[p_hard], surrogates_palette, exp_p[p_hard], f" — Sigle Observation")
 plot_spread_reduction_multi(bench_p[p_hard], surrogates_palette, exp_p[p_hard],
                              cycle_range=(0, 10), var_idx=0)
 for v in range(Nx):
@@ -1205,10 +1208,9 @@ exp_sig = {}
 for sig_val in sig_values:
     print(f"\n--- sig_obs = {sig_val} ---")
     cfg_sig = EnKFConfig(
-        T=50, M=50, Ne=20, dt=0.01,
+        T=_T, M=_M, Ne=_Ne, dt=0.01,
         p=1.0, sig_obs=sig_val,
         use_localization=False, use_inflation=False,
-        infl_factor=generic_inflation_factor,
         seed=10, enkf_type='deterministic',
     )
     bench_sig[sig_val] = run_all_models(cfg_sig, surrogates, Xf_pools, xt, surrogates_palette)
@@ -1253,6 +1255,7 @@ print("ALL BENCHMARKS COMPLETE")
 print("="*60)
 
 sig_hard = sig_values[-1]
+plot_rmse_comparison(bench_sig[sig_hard], surrogates_palette, exp_sig[sig_hard], f" — High Observation Noise")
 plot_spread_reduction_multi(bench_sig[sig_hard], surrogates_palette, exp_sig[sig_hard],
                              cycle_range=(0, 10), var_idx=0)
 for v in range(Nx):
