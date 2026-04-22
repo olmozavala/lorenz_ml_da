@@ -3,7 +3,7 @@ matplotlib.use('Agg')   # non-interactive backend — no display needed
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
-
+import pandas as pd
 # Global figure counter for unique filenames
 _fig_count = [0]
 VAR_NAMES = ['x', 'y', 'z']  # state variable names
