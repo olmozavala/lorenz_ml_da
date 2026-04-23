@@ -66,14 +66,15 @@ pytest tests/test_lorenz_systems.py::test_generate_trajectory_l63   # single tes
 |-------|-------|
 | `DenseNN` | Standard MLP |
 | `ResDenseNN` | Residual MLP; predicts Δ, returns `current + Δ` — more stable training |
-| `LSTMNN` | LSTM; reshapes input to `(batch, prev_time_steps, state_dim)` internally |
-| `RNN` | Vanilla RNN with same reshaping as LSTM |
+| `LSTMNN` | LSTM; reshapes input to `(batch, prev_time_steps, state_dim)` internally; `forward` returns `(output, hidden)` |
+| `RNN` | Vanilla RNN with same reshaping; `forward` returns `(output, hidden)`; `rnn_nonlinearity` is configurable (`'tanh'`/`'relu'`) |
 
 **`Training.py`** — Training loop and rollout logic:
 - `train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, ...)` — gradient-descent loop; returns `(trained_model, history)`
-- `recursive_rollout(model, initial_input, num_steps, prev_time_steps, device)` → `(batch, num_steps, nx)` — autoregressive rollout used during training
+- `recursive_rollout(model, initial_input, num_steps, prev_time_steps, device)` → `(batch, num_steps, nx)` — autoregressive rollout used during training; passes `hidden` state between steps for recurrent models (`LSTMNN`, `RNN`)
 - Multi-step loss: `Σ γ^s · loss_s` with γ=0.9
 - `EarlyStopping` — patience-based; resets patience when rollout depth increases
+- The training loop is a `while epoch < num_epochs:` loop (not a `for` loop), so early-stopping can jump to phase boundaries by reassigning `epoch` (e.g., `epoch = 20`, `epoch = 60`)
 
 Progressive rollout schedule (critical for DA accuracy):
 
@@ -164,23 +165,28 @@ Controls all batch training parameters. `1_SingleMLTraining.py` GUI exposes the 
 
 ```yaml
 dataset:
-  system_type: '05'          # '63' | '96' | '05'
+  system_type: '63'          # '63' | '96' | '05'
   dt: 0.001                  # integration time step
-  ns: 5000                   # samples per start location
+  ns: 100000                 # samples per start location
   save_dt: 10                # subsampling factor (effective Δt = dt × save_dt)
-  prev_time_steps: 4         # history window size
-  num_start_locations: 50    # independent ICs
-  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
+  std: 1.0                   # observation noise std (0 = clean)
+  prev_time_steps: 1         # history window size
+  ds_noise: false            # whether to add noise to dataset
+  num_start_locations: 20    # independent ICs
+  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}  # ignored for L63
 
 model:
   type: 'RNN'                # DenseNN | ResDenseNN | LSTMNN | RNN
-  hidden_layers: [1024, 1024, 512]
-  hidden_activation: 'ReLU'
+  hidden_layers: [64]
+  hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
+  output_activation: null
+  rnn_nonlinearity: 'tanh'   # RNN only: 'tanh' | 'relu'
 
 training:
   num_epochs: 10000
   batch_size: 2048
   learning_rate: 0.001
+  n_trials: 1                # independent runs (each saved with timestamp)
   early_stopping_patience: 20
   loss_func: 'MSE'           # 'MSE' | 'Huber'
   split_train: 70
@@ -188,8 +194,9 @@ training:
   split_test: 10
 
 paths:
-  outputs: 'models'
-  runs: 'runs'
+  outputs: 'models'          # full checkpoints (.pth) + configs (.yml)
+  models: 'models'
+  runs: 'runs'               # TensorBoard logs
   dataset_cache: 'dataset_cache'
 ```
 
@@ -200,4 +207,4 @@ paths:
 - **Thread management**: `1_SingleMLTraining.py` sets `OMP/MKL/NUMBA_NUM_THREADS=1` to prevent oversubscription with its `ThreadPoolExecutor`.
 - **Validation rollout**: Always 5-step regardless of training phase — do not change the validation logic when modifying the rollout schedule.
 - **Cache invalidation**: The dataset cache key covers the full dataset config dict. Changing any dataset parameter (dt, ns, system_params, etc.) will trigger regeneration of all trajectory files.
-- **Early-stopping phase-skip bug**: The epoch-skip logic that attempts to fast-forward to rollout phase boundaries (`epoch = 19`, `epoch = 59`, etc.) inside a `for … range()` loop is a silent no-op in Python — assigning to the loop variable does not affect the iterator. The early-stopping patience *reset* still fires correctly at natural epoch boundaries, so training produces correct results, just potentially slower than intended when a phase converges early.
+- **Recurrent model hidden state**: `LSTMNN` and `RNN` return `(output, hidden)` tuples. `recursive_rollout` passes the hidden state between autoregressive steps for these models; non-recurrent models (`DenseNN`, `ResDenseNN`) use the standard single-output path.
