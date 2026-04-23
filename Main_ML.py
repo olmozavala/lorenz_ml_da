@@ -160,6 +160,7 @@ def run_training(config):
             'batch_size':      train_cfg['batch_size'],
             'patience':        train_cfg['early_stopping_patience'],
             'hidden_layers':   str(hidden_list),
+            'rnn_nonlinearity': model_cfg.get('rnn_nonlinearity', None),
             'loss_func':       loss_name,
             'split_train':     split_train,
             'split_val':       split_val,
