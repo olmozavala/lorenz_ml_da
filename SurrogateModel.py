@@ -82,6 +82,7 @@ class SurrogateModel:
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
+        self._hidden = None  # recurrent hidden state (LSTMNN/RNN only)
 
     # ------------------------------------------------------------------
     # Public API
@@ -111,7 +112,11 @@ class SurrogateModel:
         x = torch.as_tensor(flat, dtype=dtype, device=self.device)
 
         with torch.no_grad():
-            pred = self.model(x).cpu().numpy().astype(np.float64).squeeze(0)
+            if isinstance(self.model, (LSTMNN, RNN)):
+                pred, self._hidden = self.model(x, self._hidden)
+            else:
+                pred = self.model(x)
+            pred = pred.cpu().numpy().astype(np.float64).squeeze(0)
 
         return pred * self.train_std + self.train_mean
 
@@ -137,6 +142,7 @@ class SurrogateModel:
         if state_history.ndim == 1:
             state_history = state_history.reshape(self.prev_time_steps, self.input_size)
 
+        self.reset_hidden()  # clear hidden state for fresh rollout
         window = state_history.copy()  # (prev_time_steps, N) in physical space
         predictions = []
 
@@ -151,15 +157,9 @@ class SurrogateModel:
         """Alias for :meth:`predict`."""
         return self.predict(state_history)
 
-    def reset_hidden(self, batch_size):
-        """Reset the hidden state of the underlying model (if supported)."""
-        reset_fn = getattr(self.model, 'reset_hidden_state', None)
-        if callable(reset_fn):
-            reset_fn(batch_size=batch_size)
-            return
-
-        # Dense/ResDense (and any other stateless models) don't need resets.
-        return
+    def reset_hidden(self, batch_size=None):
+        """Reset hidden state for recurrent models. No-op for feedforward."""
+        self._hidden = None
 
     # ------------------------------------------------------------------
     # Private helpers

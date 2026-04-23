@@ -102,13 +102,13 @@ class LSTMNN(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
 
-    def forward(self, x):
+    def forward(self, x, hidden=None):
         # x: (batch, input_size * prev_time_steps)
         x = x.view(-1, self.prev_time_steps, self.input_size)
         # out: (batch, prev_time_steps, hidden_size)
-        out, _ = self.lstm(x)
+        out, hidden_out = self.lstm(x, hidden)
         # Use only the last time-step's hidden state for prediction
-        return self.fc(out[:, -1, :])
+        return self.fc(out[:, -1, :]), hidden_out
 
 
 class RNN(nn.Module):
@@ -135,13 +135,13 @@ class RNN(nn.Module):
                           nonlinearity=nonlinearity, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
 
-    def forward(self, x):
+    def forward(self, x, hidden=None):
         # x: (batch, input_size * prev_time_steps)
         x = x.view(-1, self.prev_time_steps, self.input_size)
         # out: (batch, prev_time_steps, hidden_size)
-        out, _ = self.rnn(x)
+        out, hidden_out = self.rnn(x, hidden)
         # Use only the last time-step's output for prediction
-        return self.fc(out[:, -1, :])
+        return self.fc(out[:, -1, :]), hidden_out
 
 
 def save_model(model, model_path, train_mean, train_std, architecture):

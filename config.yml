@@ -18,9 +18,9 @@ dataset:
   system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
 
 model:
-  type: 'RNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
+  type: 'LSTMNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
   # 64, 64, 32 is a good configuration for L63
-  hidden_layers: [64, 64, 32]
+  hidden_layers: [64]
   hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
   output_activation: null
   rnn_nonlinearity: 'relu'   # RNN only: 'tanh' | 'relu'

@@ -4,6 +4,9 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from os.path import join
 
+from MachineLearning import LSTMNN, RNN
+_IS_RECURRENT = (LSTMNN, RNN)
+
 # Early Stopping
 class EarlyStopping:
     def __init__(self, patience=20, min_delta=0):
@@ -30,21 +33,27 @@ def recursive_rollout(model, initial_input, num_steps, prev_time_steps, device):
     """
     batch_size = initial_input.shape[0]
     nx = initial_input.shape[1] // prev_time_steps
-    
+
     # initial_input is (batch, prev_time_steps * nx)
     current_input = initial_input.view(batch_size, prev_time_steps, nx)
     outputs_list = []
-    
+
+    recurrent = isinstance(model, _IS_RECURRENT)
+    hidden = None  # PyTorch auto-inits to zeros
+
     for _ in range(num_steps):
         # Flatten for the model input
         model_in = current_input.reshape(batch_size, -1)
-        pred = model(model_in) # (batch, nx)
+        if recurrent:
+            pred, hidden = model(model_in, hidden)
+        else:
+            pred = model(model_in)  # (batch, nx)
         outputs_list.append(pred)
-        
+
         # Roll the sequence: [s1, s2, s3] -> [s2, s3, pred]
         # pred.unsqueeze(1) is (batch, 1, nx)
         current_input = torch.cat([current_input[:, 1:, :], pred.unsqueeze(1)], dim=1)
-        
+
     return torch.stack(outputs_list, dim=1) # (batch, num_steps, nx)
 
 # Training loop
@@ -59,7 +68,8 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
     
     history = {'train_loss': [], 'val_loss': [], 'epochs': []}
     
-    for epoch in range(num_epochs):
+    epoch = 0
+    while epoch < num_epochs:
         # Segmented schedule logic
         if epoch < 20:
             rollout_steps = 1
@@ -133,12 +143,15 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
 
         if early_stopping(val_loss):
             if rollout_steps >= 5:
-                break 
-            # Advance to next phase
-            if rollout_steps == 1: epoch = 19
-            elif rollout_steps == 2: epoch = 59
-            elif rollout_steps == 3: epoch = 119
-            elif rollout_steps == 4: epoch = 199
+                break
+            # Jump to first epoch of next phase
+            if rollout_steps == 1:   epoch = 20
+            elif rollout_steps == 2: epoch = 60
+            elif rollout_steps == 3: epoch = 120
+            elif rollout_steps == 4: epoch = 200
+            continue  # skip epoch += 1
+
+        epoch += 1
 
     writer.close()
     model.load_state_dict(torch.load(best_model_name, weights_only=False))
