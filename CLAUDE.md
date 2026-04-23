@@ -11,6 +11,7 @@ ML surrogate modeling framework for Lorenz dynamical systems (L63, L96, L05 Mode
 DAPyr (not on PyPI) must be installed locally **before** installing other dependencies:
 
 ```bash
+conda activate lorenzo   # project conda environment
 pip install DAPyr
 pip install -r requirements.txt
 ```
@@ -40,7 +41,7 @@ tensorboard --logdir runs/
 
 # Tests
 pytest tests/
-pytest tests/test_lorenz_systems.py::test_l63_shape   # single test
+pytest tests/test_lorenz_systems.py::test_generate_trajectory_l63   # single test
 ```
 
 ## Architecture
@@ -102,11 +103,15 @@ Progressive rollout schedule (critical for DA accuracy):
 - `predict(history)` → next state `(N,)`; `rollout(history, n_steps)` → `(n_steps, N)`; calling the object (`surrogate(history)`) aliases `predict`
 - Auto-discovers `.yml` sidecar next to `.pth` for full config reconstruction
 
-**`D_EnKF.py`** — Ensemble Kalman Filter:
+**`EnKF_core.py`** — Core EnKF logic (imported by `D_EnKF.py`):
+- `EnKFConfig` — dataclass for all tunable parameters
 - `run_enkf(forecast_fn, xt_0, Xf_pool, config)` — runs full DA cycle; `forecast_fn` wraps either `SurrogateModel` or ground-truth Lorenz
-- `make_surrogate_forecaster(surrogate, M)` / `make_lorenz_forecaster(dt, M)` — factory functions for `forecast_fn`
+- `make_surrogate_forecaster(surrogate, M)` / `make_lorenz_forecaster(dt, M)` — factory functions for `forecast_fn`; **note: `make_lorenz_forecaster` is currently hardcoded for L63 only**
 - Supports stochastic EnKF and deterministic ETKF, multiplicative inflation, Gaspari-Cohn localization
-- Runs 5 benchmark sweeps: baseline, M, Ne, p (observed fraction), σ_obs
+
+**`D_EnKF.py`** — EnKF experiment orchestrator:
+- Imports from `EnKF_core.py`, runs 5 benchmark sweeps: baseline, M, Ne, p (observed fraction), σ_obs
+- Figures output to `figures/`
 
 **`EnKFConfig`** key fields:
 ```python
@@ -122,6 +127,13 @@ use_inflation=False;    infl_factor=1.02
 ```
 
 **`plotting_helpers.py`** — Matplotlib/Plotly utilities for EnKF output (RMSE curves, rank histograms, spread-skill plots). Consumed by `D_EnKF.py`; not called from training code.
+
+**`verify/`** — Standalone analysis scripts (not part of the main pipeline):
+- `spread_visualizations.py` — ensemble spread plots for saved surrogates
+- `model_surrogate_skill.py` — spectral/statistical skill metrics (power spectra, skewness, kurtosis) for surrogate vs truth
+- `surrogate_ensemble_skill.py` — ensemble skill evaluation
+- `dataset_validation.py` — validates cached `.npz` dataset files in `dataset_cache/`
+- These scripts use hardcoded model paths (in `models/`) and must be updated manually when new checkpoints are trained.
 
 ### Data Flow
 
@@ -188,3 +200,4 @@ paths:
 - **Thread management**: `1_SingleMLTraining.py` sets `OMP/MKL/NUMBA_NUM_THREADS=1` to prevent oversubscription with its `ThreadPoolExecutor`.
 - **Validation rollout**: Always 5-step regardless of training phase — do not change the validation logic when modifying the rollout schedule.
 - **Cache invalidation**: The dataset cache key covers the full dataset config dict. Changing any dataset parameter (dt, ns, system_params, etc.) will trigger regeneration of all trajectory files.
+- **Early-stopping phase-skip bug**: The epoch-skip logic that attempts to fast-forward to rollout phase boundaries (`epoch = 19`, `epoch = 59`, etc.) inside a `for … range()` loop is a silent no-op in Python — assigning to the loop variable does not affect the iterator. The early-stopping patience *reset* still fires correctly at natural epoch boundaries, so training produces correct results, just potentially slower than intended when a phase converges early.
