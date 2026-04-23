@@ -112,6 +112,13 @@ def run_training(config):
     loss_name = train_cfg.get('loss_func', 'MSE')
     criterion = nn.MSELoss() if loss_name == 'MSE' else nn.HuberLoss()
 
+    # Progressive rollout schedule + gradient clipping.
+    # Defaults preserve the pre-refactor behaviour so older configs still work.
+    rollout_schedule   = train_cfg.get('rollout_schedule',
+                                       [[20, 1], [60, 2], [120, 3], [200, 4], [10000, 5]])
+    val_rollout_steps  = train_cfg.get('val_rollout_steps', 5)
+    grad_clip          = train_cfg.get('grad_clip', 1.0)
+
     # --- Trial loop ---
     for trial in range(1, train_cfg['n_trials'] + 1):
         print(f"\n{'='*60}")
@@ -165,6 +172,9 @@ def run_training(config):
             'split_train':     split_train,
             'split_val':       split_val,
             'split_test':      split_test,
+            'rollout_schedule':  rollout_schedule,
+            'val_rollout_steps': val_rollout_steps,
+            'grad_clip':         grad_clip,
             'architecture':    arch_meta,
             'train_mean':      dataset.scaler.mean_.tolist(),
             'train_std':       dataset.scaler.scale_.tolist(),
@@ -186,6 +196,9 @@ def run_training(config):
             optimizer=optimizer,
             num_epochs=train_cfg['num_epochs'],
             early_stopping=early_stopping,
+            rollout_schedule=rollout_schedule,
+            val_rollout_steps=val_rollout_steps,
+            grad_clip=grad_clip,
             device=device,
         )
 

@@ -36,6 +36,19 @@ training:
   split_val: 20              # % for validation  (remainder → test, not used in loop)
   split_test: 10
 
+  # Progressive multi-step rollout schedule. Each entry is
+  # [epoch_cutoff, rollout_steps]; the first cutoff greater than the current
+  # epoch wins. Recurrent models (LSTMNN, RNN) auto-skip the steps=1 entry
+  # because h=0 + single-step input gives no recurrence signal.
+  rollout_schedule:
+    - [20,    1]
+    - [60,    2]
+    - [120,   3]
+    - [200,   4]
+    - [10000, 5]
+  val_rollout_steps: 5        # rollout depth for validation (constant)
+  grad_clip: 1.0              # max L2 norm for gradient clipping; 0 disables
+
 paths:
   outputs: 'models'         # full checkpoints (.pth) + configs (.yml) saved here
   models: 'models'           # (reserved for dashboard-trained models)

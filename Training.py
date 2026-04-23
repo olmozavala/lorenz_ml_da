@@ -1,11 +1,41 @@
 
 import torch
-import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from os.path import join
 
 from MachineLearning import LSTMNN, RNN
 _IS_RECURRENT = (LSTMNN, RNN)
+
+# Default rollout schedule preserved for backward-compatible callers.
+# Format: list of [epoch_cutoff, rollout_steps] pairs, scanned in order.
+# The first entry whose cutoff is greater than the current epoch wins; if the
+# epoch exceeds every cutoff, the last entry's step count is used.
+_DEFAULT_ROLLOUT_SCHEDULE = [[20, 1], [60, 2], [120, 3], [200, 4], [10000, 5]]
+_DEFAULT_VAL_ROLLOUT_STEPS = 5
+_DEFAULT_GRAD_CLIP = 1.0
+
+
+def _normalize_schedule(schedule):
+    """Return the schedule as a list of (cutoff:int, steps:int) tuples, sorted
+    by cutoff. Accepts list-of-lists or list-of-tuples."""
+    if not schedule:
+        raise ValueError("rollout_schedule must be non-empty")
+    norm = [(int(c), int(s)) for c, s in schedule]
+    norm.sort(key=lambda p: p[0])
+    return norm
+
+
+def _phase_index_for_epoch(epoch, schedule):
+    """Return the schedule index active at `epoch`."""
+    for i, (cutoff, _) in enumerate(schedule):
+        if epoch < cutoff:
+            return i
+    return len(schedule) - 1
+
+
+def _rollout_steps_for_epoch(epoch, schedule):
+    return schedule[_phase_index_for_epoch(epoch, schedule)][1]
+
 
 # Early Stopping
 class EarlyStopping:
@@ -57,35 +87,58 @@ def recursive_rollout(model, initial_input, num_steps, prev_time_steps, device):
     return torch.stack(outputs_list, dim=1) # (batch, num_steps, nx)
 
 # Training loop
-def train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, progress_callback=None, device='cpu'):
+def train_model(model, model_name, train_loader, val_loader, criterion, optimizer,
+                num_epochs, early_stopping,
+                rollout_schedule=None, val_rollout_steps=None, grad_clip=None,
+                progress_callback=None, device='cpu'):
+    """
+    Train a surrogate model with a progressive multi-step rollout schedule.
+
+    Parameters
+    ----------
+    rollout_schedule : list[[int, int]] or None
+        List of ``[epoch_cutoff, rollout_steps]`` pairs. For recurrent models
+        (``LSTMNN``, ``RNN``), entries with ``rollout_steps == 1`` are filtered
+        out — a single step with zero-init hidden state gives the gates no
+        temporal signal, so that phase is skipped.
+    val_rollout_steps : int or None
+        Rollout depth used during validation (constant across the run).
+    grad_clip : float or None
+        Max L2 norm for gradient clipping; ``None`` or ``<= 0`` disables it.
+    """
+    schedule = _normalize_schedule(rollout_schedule or _DEFAULT_ROLLOUT_SCHEDULE)
+    if val_rollout_steps is None:
+        val_rollout_steps = _DEFAULT_VAL_ROLLOUT_STEPS
+    if grad_clip is None:
+        grad_clip = _DEFAULT_GRAD_CLIP
+
+    if isinstance(model, _IS_RECURRENT):
+        schedule = [(c, s) for c, s in schedule if s > 1]
+        if not schedule:
+            raise ValueError(
+                "rollout_schedule contains no entries with rollout_steps > 1; "
+                "recurrent models need at least one multi-step phase."
+            )
+        print(f"[Training] Recurrent model detected — skipping rollout_steps=1 phase. "
+              f"Effective schedule: {schedule}")
+
     writer = SummaryWriter(log_dir=f'runs/{model_name}')
-    best_val_loss = float('inf')
     best_model_name = join('models',f'{model_name}_best_model.pth')
-    
+
     model = model.to(device)
     gamma = 0.9 # Decay factor for multi-step loss
     last_rollout_steps = 0
-    
+
     history = {'train_loss': [], 'val_loss': [], 'epochs': []}
-    
+
     epoch = 0
     while epoch < num_epochs:
-        # Segmented schedule logic
-        if epoch < 20:
-            rollout_steps = 1
-        elif epoch < 60:
-            rollout_steps = 2
-        elif epoch < 120:
-            rollout_steps = 3
-        elif epoch < 200:
-            rollout_steps = 4
-        else:
-            rollout_steps = 5
-            
+        rollout_steps = _rollout_steps_for_epoch(epoch, schedule)
+
         # Reset Early Stopping if rollout depth increases
         if rollout_steps > last_rollout_steps:
             early_stopping.counter = 0
-            early_stopping.best_loss = None 
+            early_stopping.best_loss = None
             last_rollout_steps = rollout_steps
 
         model.train()
@@ -93,17 +146,19 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
-            
+
             # Predict recursively
             preds = recursive_rollout(model, inputs, rollout_steps, model.prev_time_steps, device)
-            
+
             # Weighted loss across rollout steps
             loss = 0
             for s in range(rollout_steps):
                 step_loss = criterion(preds[:, s, :], targets[:, s, :])
                 loss += (gamma ** s) * step_loss
-            
+
             loss.backward()
+            if grad_clip and grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
             optimizer.step()
             train_loss += loss.item() * inputs.size(0)
 
@@ -112,17 +167,16 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
 
         model.eval()
         val_loss = 0.0
-        val_rollout_steps = 5 
         with torch.no_grad():
             for inputs, targets in val_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 preds = recursive_rollout(model, inputs, val_rollout_steps, model.prev_time_steps, device)
-                
+
                 loss = 0
                 for s in range(val_rollout_steps):
                     step_loss = criterion(preds[:, s, :], targets[:, s, :])
                     loss += (gamma ** s) * step_loss
-                
+
                 val_loss += loss.item() * inputs.size(0)
 
         val_loss /= len(val_loader.dataset)
@@ -142,13 +196,11 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
              torch.save(model.state_dict(), best_model_name)
 
         if early_stopping(val_loss):
-            if rollout_steps >= 5:
+            phase = _phase_index_for_epoch(epoch, schedule)
+            if phase >= len(schedule) - 1:
                 break
-            # Jump to first epoch of next phase
-            if rollout_steps == 1:   epoch = 20
-            elif rollout_steps == 2: epoch = 60
-            elif rollout_steps == 3: epoch = 120
-            elif rollout_steps == 4: epoch = 200
+            # Jump to first epoch of next phase (== current phase's cutoff)
+            epoch = schedule[phase][0]
             continue  # skip epoch += 1
 
         epoch += 1
