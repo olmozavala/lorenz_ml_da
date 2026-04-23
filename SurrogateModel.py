@@ -161,6 +161,139 @@ class SurrogateModel:
         """Reset hidden state for recurrent models. No-op for feedforward."""
         self._hidden = None
 
+    def batch_predict(self, state_histories):
+        """
+        Batched single-step prediction in physical space.
+
+        Runs B trajectories through the model in a single forward pass so the
+        GPU can batch the matmuls. Stateless: never reads or writes
+        ``self._hidden`` — each call is independent of any previous
+        ``predict`` / ``rollout`` / ``batch_*`` call.
+
+        For ``LSTMNN`` / ``RNN``, PyTorch's recurrent modules keep the hidden
+        tensor shaped ``(num_layers, B, hidden_size)``; each of the B batch
+        slots evolves independently, so trajectories never share memory.
+
+        Parameters
+        ----------
+        state_histories : np.ndarray
+            Shape ``(B, prev_time_steps, N)`` or ``(B, prev_time_steps * N)``,
+            physical space, oldest-first along the time axis.
+
+        Returns
+        -------
+        np.ndarray of shape ``(B, N)``.
+        """
+        window = self._prepare_batch(state_histories)  # (B, prev_time_steps, N) normalised, on device
+
+        with torch.inference_mode():
+            pred_norm, _ = self._forward_normalized(window, hidden=None)
+
+        pred = pred_norm.cpu().numpy().astype(np.float64)
+        return pred * self.train_std + self.train_mean
+
+    def batch_rollout(self, state_histories, num_steps):
+        """
+        Batched autoregressive rollout in physical space.
+
+        All B members advance together; the entire rollout stays on-device in
+        normalised space (``StandardScaler`` is linear, so denorm-then-renorm
+        at every step is wasted work) and denormalises once at the end.
+
+        For ``LSTMNN`` / ``RNN``, the hidden state is a local variable scoped
+        to this call — ``self._hidden`` is untouched, and each of the B
+        members carries its own independent slice of the hidden tensor across
+        rollout steps. Permuting the batch order in gives the same outputs
+        permuted.
+
+        Parameters
+        ----------
+        state_histories : np.ndarray
+            Shape ``(B, prev_time_steps, N)`` or ``(B, prev_time_steps * N)``,
+            physical space, oldest-first.
+        num_steps : int
+            Number of future steps to predict.
+
+        Returns
+        -------
+        np.ndarray of shape ``(B, num_steps, N)``.
+        """
+        if num_steps <= 0:
+            raise ValueError(f"num_steps must be positive, got {num_steps}")
+
+        window = self._prepare_batch(state_histories)  # (B, prev_time_steps, N) normalised
+        hidden = None
+        preds = []
+
+        with torch.inference_mode():
+            for _ in range(num_steps):
+                pred_norm, hidden = self._forward_normalized(window, hidden=hidden)
+                preds.append(pred_norm)
+                # Roll: drop oldest step, append new prediction (still normalised)
+                window = torch.cat([window[:, 1:, :], pred_norm.unsqueeze(1)], dim=1)
+
+        out_norm = torch.stack(preds, dim=1)  # (B, num_steps, N)
+        out = out_norm.cpu().numpy().astype(np.float64)
+        return out * self.train_std + self.train_mean
+
+    def _prepare_batch(self, state_histories):
+        """
+        Validate, reshape, normalise, and move a batch of histories to device.
+
+        Returns a tensor of shape ``(B, prev_time_steps, N)`` in normalised
+        space, with the model's parameter dtype.
+        """
+        arr = np.asarray(state_histories, dtype=np.float64)
+        if arr.ndim == 2:
+            # (B, prev_time_steps * N) — reshape
+            if arr.shape[1] != self.prev_time_steps * self.input_size:
+                raise ValueError(
+                    f"Flat batch must have shape (B, {self.prev_time_steps * self.input_size}), "
+                    f"got {arr.shape}."
+                )
+            arr = arr.reshape(arr.shape[0], self.prev_time_steps, self.input_size)
+        elif arr.ndim == 3:
+            if arr.shape[1] != self.prev_time_steps or arr.shape[2] != self.input_size:
+                raise ValueError(
+                    f"Batch must have shape (B, {self.prev_time_steps}, {self.input_size}), "
+                    f"got {arr.shape}."
+                )
+        else:
+            raise ValueError(
+                f"state_histories must be 2D (B, prev_time_steps * N) or "
+                f"3D (B, prev_time_steps, N); got ndim={arr.ndim}."
+            )
+
+        if arr.shape[0] < 1:
+            raise ValueError("Batch size B must be >= 1.")
+
+        normalised = (arr - self.train_mean) / self.train_std
+        dtype = next(self.model.parameters()).dtype
+        return torch.as_tensor(normalised, dtype=dtype, device=self.device)
+
+    def _forward_normalized(self, window, hidden):
+        """
+        Single forward pass over a batch already in normalised space on-device.
+
+        Parameters
+        ----------
+        window : torch.Tensor
+            Shape ``(B, prev_time_steps, N)``, normalised.
+        hidden : recurrent hidden state or None.
+
+        Returns
+        -------
+        (pred_normalised, hidden_next) — ``pred_normalised`` is
+        ``(B, N)`` on-device; ``hidden_next`` is ``None`` for feedforward.
+        """
+        B = window.shape[0]
+        flat = window.reshape(B, -1)
+        if isinstance(self.model, (LSTMNN, RNN)):
+            pred, hidden_next = self.model(flat, hidden)
+            return pred, hidden_next
+        pred = self.model(flat)
+        return pred, None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
