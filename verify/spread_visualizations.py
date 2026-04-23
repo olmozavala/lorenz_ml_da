@@ -22,9 +22,9 @@ def init_models(n_steps):
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1775267969_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1775269773_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775269849_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1776975564_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1776975895_best_model.pth'),
+            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1776975895_best_model.pth'),
         }
     elif n_steps == 4:
         print("Initializing 4 time step models")
@@ -79,19 +79,14 @@ surrogate_series = {name: [] for name in surrogates.keys()}
 
 for name, model in surrogates.items():
     pool = Xf_pool.copy()
-    pbar = tqdm.tqdm(range(Ne), desc=f"Running {name}", unit="member", leave=False)
-    for e in pbar:
-        pbar.set_postfix(member=e, refresh=False)
-        sol = model.rollout(pool[e, :], num_steps=n_steps)
-        surrogate_pools[name].append(sol)
-    surrogate_series[name] = np.stack(surrogate_pools[name])
+    sol = model.batch_rollout(pool.reshape(Ne, 1, Nx), num_steps=n_steps)
+    surrogate_series[name] = sol
     tqdm.tqdm.write(f"Ensemble pool ready for {name}")
 
 # Lorenz baseline pool (perfect model)
 pool_lorenz = Xf_pool.copy()
 lorenz_pools = []
 for e in tqdm.tqdm(range(Ne), desc="Running Lorenz63", unit="member", leave=False):
-    pbar.set_postfix(member=e, refresh=False)
     sol = LorenzSystems.generate_trajectory_fast('63', pool_lorenz[e, :], dt, n_steps + 1)
     lorenz_pools.append(sol)
 lorenz_series = np.stack(lorenz_pools)
