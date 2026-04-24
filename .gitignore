@@ -167,6 +167,7 @@ _figures/
 figures/
 results/
 *_setup.yml
+logs/
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
