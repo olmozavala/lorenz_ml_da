@@ -208,5 +208,15 @@ def run_training(config):
 
 
 if __name__ == "__main__":
-    config = load_config()
+    import argparse
+    parser = argparse.ArgumentParser(description="Batch ML training for Lorenz surrogates.")
+    parser.add_argument(
+        'config',
+        nargs='?',
+        default='config.yml',
+        help="Path to YAML config (default: config.yml)",
+    )
+    args = parser.parse_args()
+    config = load_config(args.config)
+    print(f"Loaded config: {args.config}")
     run_training(config)
