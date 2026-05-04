@@ -6,8 +6,9 @@ import pandas as pd
 
 import torch
 import numpy as np
-from scipy.linalg import sqrtm
 import os
+import pickle as pkl
+from os.path import join
 
 from os.path import join
 from SurrogateModel import SurrogateModel
@@ -22,11 +23,14 @@ os.makedirs("figures", exist_ok=True)
 _fig_count = [0]
 
 # Global configuration parameters
-_T = 50
+_T = 300
 _M = 50
 _Ne = 20
 _CORE_SEED = 10
-_NE_MAX = 200
+_NE_MAX = 100
+
+pkl_filename_string = 'l63_benchmark_results_S_{:03d}_T_{:04d}.pkl'.format(_CORE_SEED, _T)
+benchmark_results = {}
 
 def _print_benchmark_table(results, title=""):
     """Print a summary DataFrame for a set of results."""
@@ -131,6 +135,9 @@ np.random.seed(_CORE_SEED)
 Nx = 3
 spinup_steps = 2000
 x0 = np.random.randn(Nx).astype(np.float64)
+
+benchmark_results["x0"] = x0
+
 dt = 0.01
 n_steps = len(np.arange(0, 10, dt))
 
@@ -232,7 +239,6 @@ def run_all_models(cfg, surrogates, Xf_pools, xt_0, palette):
 print("\n" + "="*60)
 print("BENCHMARK 1: Baseline (reference conditions)")
 print("="*60)
-generic_inflation_factor = 1.05
 
 cfg_base = EnKFConfig(
     T=_T, M=_M, Ne=_Ne, dt=0.01,
@@ -242,6 +248,7 @@ cfg_base = EnKFConfig(
 )
 
 results_base = run_all_models(cfg_base, surrogates, Xf_pools, xt, surrogates_palette)
+benchmark_results["b1"] = results_base
 
 _print_benchmark_table(results_base, "BENCHMARK 1 — Baseline Summary (T=10, M=10, Ne=20, p=1.0, σ=1.0)")
 
@@ -287,6 +294,9 @@ for M_val in M_values:
     bench_M[M_val] = run_all_models(cfg_m, surrogates, Xf_pools, xt, surrogates_palette)
     exp_M[M_val] = cfg_m
 
+benchmark_results["b2"] = {"results": bench_M, "setup" : exp_M}
+
+"""
 # Summary: mean RMSE vs M for each architecture
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 all_names = ['Lorenz63'] + list(surrogates.keys())
@@ -346,7 +356,7 @@ for v in range(Nx):
 #                            cycle_range=(0, 5))
 #    plot_spread_reduction(bench_M[m_hard][name], name, surrogates_palette, exp_M[m_hard],
 #                          cycle_range=(0, 5), var_idx=0)
-
+"""
 # ============================================================
 # BENCHMARK 3: Stress test — ensemble size (Ne)
 # ============================================================
@@ -355,7 +365,7 @@ print("\n" + "="*60)
 print("BENCHMARK 3: Ensemble size sweep (Ne)")
 print("="*60)
 
-Ne_values = [5, 10, 20, 50, 100, 200]
+Ne_values = [5, 10, 20, 50, 100]
 bench_Ne = {}
 exp_Ne = {}
 for Ne_val in Ne_values:
@@ -369,6 +379,8 @@ for Ne_val in Ne_values:
     bench_Ne[Ne_val] = run_all_models(cfg_ne, surrogates, Xf_pools, xt, surrogates_palette)
     exp_Ne[Ne_val] = cfg_ne
 
+benchmark_results["b3"] = {"results": bench_Ne, "setup" : exp_Ne}
+"""
 # Summary: mean RMSE vs Ne
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 for name in all_names:
@@ -415,7 +427,7 @@ for v in range(Nx):
 #                            cycle_range=(0, 5))
 #    plot_spread_reduction(bench_Ne[ne_hard][name], name, surrogates_palette, exp_Ne[ne_hard],
 #                          cycle_range=(0, 5), var_idx=0)
-
+"""
 # ============================================================
 # BENCHMARK 4: Stress test — partial observations (p)
 # ============================================================
@@ -440,6 +452,8 @@ for p_val in p_values:
     bench_p[p_val] = run_all_models(cfg_p, surrogates, Xf_pools, xt, surrogates_palette)
     exp_p[p_val] = cfg_p
 
+benchmark_results["b4"] = {"results": bench_p, "setup" : exp_p}
+"""
 # Summary: mean RMSE vs p
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 for name in all_names:
@@ -483,7 +497,7 @@ plot_spread_reduction_multi(bench_p[p_hard], surrogates_palette, exp_p[p_hard],
 for v in range(Nx):
     plot_ensemble_spaghetti_multi(bench_p[p_hard], surrogates_palette, exp_p[p_hard],
                                   cycle_range=(0, 5), var_idx=v)
-
+"""
 # ============================================================
 # BENCHMARK 5: Stress test — observation noise (sig_obs)
 # ============================================================
@@ -505,7 +519,13 @@ for sig_val in sig_values:
     )
     bench_sig[sig_val] = run_all_models(cfg_sig, surrogates, Xf_pools, xt, surrogates_palette)
     exp_sig[sig_val] = cfg_sig
-    
+
+benchmark_results["b5"] = {"results": bench_sig, "setup" : exp_sig}
+
+with open(join("results", pkl_filename_string), "wb") as f:
+    pkl.dump(benchmark_results, f)
+
+"""
 # Summary: mean RMSE vs sig_obs
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 for name in all_names:
@@ -552,3 +572,4 @@ for v in range(Nx):
     plot_ensemble_spaghetti_multi(bench_sig[sig_hard], surrogates_palette, exp_sig[sig_hard],
                                   cycle_range=(0, 5), var_idx=v)
 # %%
+"""
