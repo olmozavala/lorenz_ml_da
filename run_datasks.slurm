@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=l63_training
+#SBATCH --job-name=l63_DA_exp
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
 #SBATCH --nodes=1
