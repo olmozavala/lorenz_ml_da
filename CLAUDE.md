@@ -40,7 +40,7 @@ tensorboard --logdir runs/
 
 # Tests
 pytest tests/
-pytest tests/test_lorenz_systems.py::test_l63_shape   # single test
+pytest tests/test_lorenz_systems.py::test_generate_trajectory_l63   # single test
 ```
 
 ## Architecture
@@ -53,7 +53,7 @@ pytest tests/test_lorenz_systems.py::test_l63_shape   # single test
 | `1_SingleMLTraining.py` | Dash app — full interactive training UI |
 | `Main_ML.py` | CLI — batch training from `config.yml` |
 | `ML_Model_Comparison.py` | CLI — evaluate and compare saved models |
-| `D_EnKF.py` | Script — full EnKF DA experiments with surrogate vs. truth |
+| `D_EnKF.py` | Script — orchestrates EnKF DA experiments; imports core logic from `EnKF_core.py` |
 
 ### Core Modules
 
@@ -93,8 +93,8 @@ Progressive rollout schedule (critical for DA accuracy):
 
 **`lorenz/lorenz_systems.py`** — DAPyr integration layer:
 - `LorenzSystems.generate_trajectory_fast()` — preferred; single batch call to SUNDIALS via numbalsoda
-- `LorenzSystems.generate_trajectory()` — legacy per-step loop (slower, avoid)
-- Caches DAPyr RHS function pointers by `(system_type, params)` to avoid Numba recompilation
+- `LorenzSystems.generate_trajectory()` — legacy per-step loop (slower; used only in tests)
+- Caches DAPyr RHS function pointers by `(system_type, params)` in module-level `_rhs_cache` to avoid Numba recompilation — first call for a new `(system, params)` combo triggers multi-second JIT warm-up
 
 **`SurrogateModel.py`** — Inference wrapper:
 - Loads any checkpoint, reconstructs architecture from metadata
@@ -102,11 +102,12 @@ Progressive rollout schedule (critical for DA accuracy):
 - `predict(history)` → next state `(N,)`; `rollout(history, n_steps)` → `(n_steps, N)`; calling the object (`surrogate(history)`) aliases `predict`
 - Auto-discovers `.yml` sidecar next to `.pth` for full config reconstruction
 
-**`D_EnKF.py`** — Ensemble Kalman Filter:
+**`EnKF_core.py`** — Ensemble Kalman Filter implementation:
+- `EnKFConfig` — dataclass for all DA experiment parameters
 - `run_enkf(forecast_fn, xt_0, Xf_pool, config)` — runs full DA cycle; `forecast_fn` wraps either `SurrogateModel` or ground-truth Lorenz
-- `make_surrogate_forecaster(surrogate, M)` / `make_lorenz_forecaster(dt, M)` — factory functions for `forecast_fn`
+- `make_surrogate_forecaster(surrogate, M)` / `make_lorenz_forecaster(dt, M)` — factory functions for `forecast_fn`; **note: `make_lorenz_forecaster` hardcodes system type `'63'`**
+- `create_localization_matrix(r, n)` — Gaspari-Cohn-like localization
 - Supports stochastic EnKF and deterministic ETKF, multiplicative inflation, Gaspari-Cohn localization
-- Runs 5 benchmark sweeps: baseline, M, Ne, p (observed fraction), σ_obs
 
 **`EnKFConfig`** key fields:
 ```python
@@ -120,6 +121,8 @@ enkf_type='stochastic'  # or 'deterministic' (ETKF)
 use_localization=False; loc_radius=3.0
 use_inflation=False;    infl_factor=1.02
 ```
+
+`D_EnKF.py` imports from `EnKF_core.py` and runs 5 benchmark sweeps (baseline, M, Ne, p, σ_obs). It also contains local shadow definitions of `make_surrogate_forecaster` / `make_lorenz_forecaster` at lines 194/205 that override the imports — be careful when modifying either file.
 
 **`plotting_helpers.py`** — Matplotlib/Plotly utilities for EnKF output (RMSE curves, rank histograms, spread-skill plots). Consumed by `D_EnKF.py`; not called from training code.
 
@@ -146,29 +149,36 @@ config.yml
 `.yml` sidecar stores the full training config for reproducibility.  
 Filenames: `{ModelType}_L{system}_trial{n}_{timestamp}.pth`.
 
+Best-model checkpoints (`*_best_model.pth`) are raw `state_dict` only — load the companion `.yml` for architecture and normalization metadata.
+
 ## Configuration (`config.yml`)
 
 Controls all batch training parameters. `1_SingleMLTraining.py` GUI exposes the same knobs.
 
 ```yaml
 dataset:
-  system_type: '05'          # '63' | '96' | '05'
+  system_type: '63'          # '63' | '96' | '05'
   dt: 0.001                  # integration time step
-  ns: 5000                   # samples per start location
+  ns: 100000                 # samples per start location
   save_dt: 10                # subsampling factor (effective Δt = dt × save_dt)
-  prev_time_steps: 4         # history window size
-  num_start_locations: 50    # independent ICs
-  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
+  std: 1.0                   # observation noise std (0 = clean trajectories)
+  ds_noise: false            # add noise to dataset
+  prev_time_steps: 1         # history window size
+  num_start_locations: 20    # independent ICs
+  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}  # ignored for L63
 
 model:
   type: 'RNN'                # DenseNN | ResDenseNN | LSTMNN | RNN
-  hidden_layers: [1024, 1024, 512]
+  hidden_layers: [64, 64, 32]
   hidden_activation: 'ReLU'
+  output_activation: null
+  rnn_nonlinearity: 'relu'   # RNN only: 'tanh' | 'relu'
 
 training:
   num_epochs: 10000
   batch_size: 2048
   learning_rate: 0.001
+  n_trials: 1                # independent training runs (each saved separately)
   early_stopping_patience: 20
   loss_func: 'MSE'           # 'MSE' | 'Huber'
   split_train: 70
@@ -188,3 +198,4 @@ paths:
 - **Thread management**: `1_SingleMLTraining.py` sets `OMP/MKL/NUMBA_NUM_THREADS=1` to prevent oversubscription with its `ThreadPoolExecutor`.
 - **Validation rollout**: Always 5-step regardless of training phase — do not change the validation logic when modifying the rollout schedule.
 - **Cache invalidation**: The dataset cache key covers the full dataset config dict. Changing any dataset parameter (dt, ns, system_params, etc.) will trigger regeneration of all trajectory files.
+- **Early-stopping phase skip (known bug)**: Assigning to the loop variable inside `for epoch in range(...)` is a silent no-op in Python — the phase-skip shortcut in `train_model` does not advance the iterator. The patience reset still fires correctly at epoch boundaries, so training is not broken but may be slower than intended when a phase converges early.
