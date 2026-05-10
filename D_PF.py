@@ -41,8 +41,8 @@ _fig_count = [0]
 
 # Global configuration parameters
 _T = 350
-_M = 100
-_Ne = 100
+_M = 50
+_Ne = 500
 _CORE_SEED = 10
 _NE_MAX = 500
 
@@ -249,13 +249,14 @@ print("=" * 60)
 cfg_base = PFConfig(
     T=_T, M=_M, Ne=_Ne, dt=0.01,
     p=1.0, sig_obs=1.0,
-    NER=0.5, reg=0.1, jitter=True,
+    NER=1.0, reg=0.1, jitter=True, nuj=True,
     use_inflation=False,
     obs_seed=10, filter_seed=10,
 )
 
 results_base = run_all_models(cfg_base, surrogates, Xf_pools, xt, surrogates_palette)
 benchmark_results["b1"] = results_base
+cfg_base.use_localization = False
 
 _print_benchmark_table(
     results_base,

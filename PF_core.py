@@ -60,11 +60,13 @@ class PFConfig:
         NER=0.5,             # resample when N_eff <= NER * Ne
         reg=0.1,             # jitter bandwidth scale (0 disables jitter)
         jitter=True,         # post-resample regularization on/off
+        nuj=True,            # "no unique jitter": jitter duplicates only
         use_inflation=False,
         infl_factor=1.02,    # multiplicative anomaly inflation
         seed=None,           # legacy alias: sets both seeds when provided
         obs_seed=None,
         filter_seed=None,
+        use_localization=False, # Legacy field: unused in PF
     ):
         self.T = T
         self.M = M
@@ -75,9 +77,10 @@ class PFConfig:
         self.NER = NER
         self.reg = reg
         self.jitter = jitter
+        self.nuj = nuj
         self.use_inflation = use_inflation
         self.infl_factor = infl_factor
-
+        self.use_localization = use_localization
         if obs_seed is None:
             obs_seed = seed if seed is not None else 10
         if filter_seed is None:
@@ -128,34 +131,59 @@ def systematic_resample(weights, rng):
 # ============================================================
 # Jitter (post-resample regularization)
 # ============================================================
-def _silverman_bandwidth(Ne, Nx):
-    """Silverman's rule-of-thumb KDE bandwidth for an Nx-D Gaussian kernel."""
-    return (4.0 / (Nx + 2.0)) ** (1.0 / (Nx + 4.0)) * Ne ** (-1.0 / (Nx + 4.0))
+def _scott_bandwidth(Ne, Nx):
+    """Scott's rule-of-thumb KDE bandwidth (matches dapper.auto_bandw)."""
+    return Ne ** (-1.0 / (Nx + 4.0))
 
 
-def _jitter_ensemble(E, weights_pre, reg, rng):
-    """Add Gaussian jitter scaled by the weighted ensemble covariance.
+def _raw_C12(E, w):
+    """Weighted matrix square root of the ensemble covariance.
 
-    The jitter covariance uses the *pre*-resample weighted covariance so
-    that duplicated particles do not bias the spread estimate downward.
+    Returns C12 of shape (Ne, Nx) such that C12.T @ C12 ≈ weighted cov of E,
+    using a weighted mean, weighted anomalies, and the unbiased weight factor
+    1 / (1 - Σw²). Mirrors dapper's raw_C12 with a column-particle layout.
     """
-    Nx, Ne = E.shape
-    # Weighted covariance of the pre-resample cloud.
-    # np.cov requires aweights to be > 0 for at least one entry; the
-    # post-resample E here may have many duplicate columns, but the
-    # weights_pre we pass in are the pre-resample ones, evaluated on the
-    # *original* (pre-resample) ensemble. To keep this simple and correct
-    # we estimate the covariance from the post-resample (uniform-weight)
-    # cloud — this is asymptotically equivalent and avoids carrying state.
-    cov_E = np.cov(E)  # (Nx, Nx)
-    # Cholesky with a tiny ridge for numerical safety.
-    try:
-        chol = np.linalg.cholesky(cov_E + 1e-10 * np.eye(Nx))
-    except np.linalg.LinAlgError:
-        chol = np.diag(np.sqrt(np.maximum(np.diag(cov_E), 0.0)) + 1e-6)
-    h = _silverman_bandwidth(Ne, Nx)
-    noise = rng.standard_normal((Nx, Ne))
-    return E + reg * h * (chol @ noise)
+    _, Ne = E.shape
+    sumw2 = float(np.sum(w * w))
+    if (not np.isfinite(sumw2)) or sumw2 >= 1.0 - 1e-12:
+        w = np.full(Ne, 1.0 / Ne)
+        sumw2 = 1.0 / Ne
+    mu = E @ w
+    A = E - mu[:, None]
+    ub = 1.0 / (1.0 - sumw2)
+    return (np.sqrt(ub * w[None, :]) * A).T
+
+
+def _mask_duplicates_sorted(idx):
+    """True at positions whose value equals a neighbour in the sorted index."""
+    dups = idx == np.roll(idx, 1)
+    dups |= idx == np.roll(idx, -1)
+    return dups
+
+
+def _jitter_ensemble(E, idx, C12, nuj, rng):
+    """Add Gaussian jitter using a pre-computed weighted-cov factor.
+
+    E    : (Nx, Ne) post-resample ensemble (already indexed by idx)
+    idx  : (Ne,)    resample indices (sorted, from systematic_resample)
+    C12  : (Ne, Nx) bandwidth-scaled square root of weighted cov
+    nuj  : bool     if True, jitter only duplicates; else jitter all
+    """
+    _, Ne = E.shape
+    rank = C12.shape[0]
+    if nuj:
+        dups = _mask_duplicates_sorted(idx)
+        n = int(dups.sum())
+        if n == 0:
+            return E
+        D = rng.standard_normal((n, rank))
+        noise = (D @ C12).T
+        out = E.copy()
+        out[:, dups] += noise
+        return out
+    D = rng.standard_normal((Ne, rank))
+    noise = (D @ C12).T
+    return E + noise
 
 
 # ============================================================
@@ -360,13 +388,14 @@ def run_pf(forecast_fn, xt_0, Xf_pool, config: PFConfig):
         # ----------------------------------------------------------
         Xa_k = Xf_k.copy()
         if n_eff_k <= cfg.NER * cfg.Ne:
+            # Pre-resample weighted-cov factor (must be built before w/idx mutate)
+            C12 = cfg.reg * _scott_bandwidth(cfg.Ne, Nx) * _raw_C12(Xa_k, w)
             idx = systematic_resample(w, filt_rng)
             Xa_k = Xa_k[:, idx]
-            w_pre = w.copy()         # pre-reset, in case _jitter wants it later
             w = np.full(cfg.Ne, 1.0 / cfg.Ne)
             resampled[k] = True
             if cfg.jitter and cfg.reg > 0:
-                Xa_k = _jitter_ensemble(Xa_k, w_pre, cfg.reg, filt_rng)
+                Xa_k = _jitter_ensemble(Xa_k, idx, C12, cfg.nuj, filt_rng)
 
         # ----------------------------------------------------------
         # Multiplicative inflation around the (weighted) analysis mean
