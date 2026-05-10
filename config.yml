@@ -18,7 +18,7 @@ dataset:
   system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
 
 model:
-  type: 'LSTMNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
+  type: 'RNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
   # 64, 64, 32 is a good configuration for L63
   hidden_layers: [64]
   hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
@@ -30,24 +30,17 @@ training:
   batch_size: 2048
   learning_rate: 0.001
   n_trials: 1                # independent training runs (each saved separately)
-  early_stopping_patience: 20
+  early_stopping_patience: 30
   loss_func: 'MSE'           # 'MSE' | 'Huber'
   split_train: 70            # % of dataset used for training
   split_val: 20              # % for validation  (remainder → test, not used in loop)
   split_test: 10
-
-  # Progressive multi-step rollout schedule. Each entry is
-  # [epoch_cutoff, rollout_steps]; the first cutoff greater than the current
-  # epoch wins. Recurrent models (LSTMNN, RNN) auto-skip the steps=1 entry
-  # because h=0 + single-step input gives no recurrence signal.
-  rollout_schedule:
-    - [20,    1]
-    - [60,    2]
-    - [120,   3]
-    - [200,   4]
-    - [10000, 5]
-  val_rollout_steps: 5        # rollout depth for validation (constant)
-  grad_clip: 1.0              # max L2 norm for gradient clipping; 0 disables
+  max_rollout_steps: 20      # replaces hardcoded 5; val also uses this
+  rollout_gamma: 0.95        # replaces hardcoded 0.9
+  stateful_rollout: true     # thread hidden state through rollout (RNN/LSTMNN only)
+  lr_phase_decay: 0.5        # multiply LR by this factor at each phase advance
+  lr_scheduler_patience: 10  # ReduceLROnPlateau patience within a phase
+  lr_scheduler_factor: 0.5   # ReduceLROnPlateau reduction factor
 
 paths:
   outputs: 'models'         # full checkpoints (.pth) + configs (.yml) saved here

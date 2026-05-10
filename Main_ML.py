@@ -1,6 +1,7 @@
 import os
 import time
 import yaml
+import argparse
 import torch
 import torch.nn as nn
 import numpy as np
@@ -112,13 +113,6 @@ def run_training(config):
     loss_name = train_cfg.get('loss_func', 'MSE')
     criterion = nn.MSELoss() if loss_name == 'MSE' else nn.HuberLoss()
 
-    # Progressive rollout schedule + gradient clipping.
-    # Defaults preserve the pre-refactor behaviour so older configs still work.
-    rollout_schedule   = train_cfg.get('rollout_schedule',
-                                       [[20, 1], [60, 2], [120, 3], [200, 4], [10000, 5]])
-    val_rollout_steps  = train_cfg.get('val_rollout_steps', 5)
-    grad_clip          = train_cfg.get('grad_clip', 1.0)
-
     # --- Trial loop ---
     for trial in range(1, train_cfg['n_trials'] + 1):
         print(f"\n{'='*60}")
@@ -143,13 +137,14 @@ def run_training(config):
             )
 
         arch_meta = {
-            'model_type':      model_type,
-            'input_size':      input_size,
-            'prev_time_steps': prev_steps,
-            'hidden_layers':   hidden_list,
-            'system':          sys_type,
-            'N':               input_size,   # legacy field; same as input_size
-            'system_params':   sys_params,   # stored for eval reconstruction
+            'model_type':        model_type,
+            'input_size':        input_size,
+            'prev_time_steps':   prev_steps,
+            'hidden_layers':     hidden_list,
+            'hidden_activation': model_cfg.get('hidden_activation', 'ReLU'),
+            'system':            sys_type,
+            'N':                 input_size,   # legacy field; same as input_size
+            'system_params':     sys_params,   # stored for eval reconstruction
         }
 
         model_name = f"{model_type}_L{sys_type}_trial{trial}_{int(time.time())}"
@@ -157,27 +152,30 @@ def run_training(config):
 
         # Save YAML config immediately — available even if training stops early
         run_config = {
-            'model_type':      model_type,
-            'system_type':     sys_type,
-            'dt':              dataset_cfg['dt'],
-            'save_dt':         dataset_cfg['save_dt'],
-            'prev_steps':      prev_steps,
-            'num_locs':        dataset_cfg.get('num_start_locations', 1),
-            'samples_per_loc': dataset_cfg['ns'],
-            'batch_size':      train_cfg['batch_size'],
-            'patience':        train_cfg['early_stopping_patience'],
-            'hidden_layers':   str(hidden_list),
-            'rnn_nonlinearity': model_cfg.get('rnn_nonlinearity', None),
-            'loss_func':       loss_name,
-            'split_train':     split_train,
-            'split_val':       split_val,
-            'split_test':      split_test,
-            'rollout_schedule':  rollout_schedule,
-            'val_rollout_steps': val_rollout_steps,
-            'grad_clip':         grad_clip,
-            'architecture':    arch_meta,
-            'train_mean':      dataset.scaler.mean_.tolist(),
-            'train_std':       dataset.scaler.scale_.tolist(),
+            'model_type':          model_type,
+            'system_type':         sys_type,
+            'dt':                  dataset_cfg['dt'],
+            'save_dt':             dataset_cfg['save_dt'],
+            'prev_steps':          prev_steps,
+            'num_locs':            dataset_cfg.get('num_start_locations', 1),
+            'samples_per_loc':     dataset_cfg['ns'],
+            'batch_size':          train_cfg['batch_size'],
+            'patience':            train_cfg['early_stopping_patience'],
+            'hidden_layers':       str(hidden_list),
+            'rnn_nonlinearity':    model_cfg.get('rnn_nonlinearity', None),
+            'loss_func':           loss_name,
+            'split_train':         split_train,
+            'split_val':           split_val,
+            'split_test':          split_test,
+            'max_rollout_steps':   train_cfg.get('max_rollout_steps', 5),
+            'rollout_gamma':       train_cfg.get('rollout_gamma', 0.9),
+            'stateful_rollout':    train_cfg.get('stateful_rollout', False),
+            'lr_phase_decay':      train_cfg.get('lr_phase_decay', 1.0),
+            'lr_scheduler_patience': train_cfg.get('lr_scheduler_patience', 10),
+            'lr_scheduler_factor': train_cfg.get('lr_scheduler_factor', 0.5),
+            'architecture':        arch_meta,
+            'train_mean':          dataset.scaler.mean_.tolist(),
+            'train_std':           dataset.scaler.scale_.tolist(),
         }
         yml_path = os.path.join(paths_cfg['outputs'], f"{model_name}.yml")
         with open(yml_path, 'w') as f:
@@ -196,10 +194,14 @@ def run_training(config):
             optimizer=optimizer,
             num_epochs=train_cfg['num_epochs'],
             early_stopping=early_stopping,
-            rollout_schedule=rollout_schedule,
-            val_rollout_steps=val_rollout_steps,
-            grad_clip=grad_clip,
             device=device,
+            max_rollout_steps=train_cfg.get('max_rollout_steps', 5),
+            gamma=train_cfg.get('rollout_gamma', 0.9),
+            stateful_rollout=train_cfg.get('stateful_rollout', False),
+            initial_lr=train_cfg['learning_rate'],
+            lr_phase_decay=train_cfg.get('lr_phase_decay', 1.0),
+            lr_scheduler_patience=train_cfg.get('lr_scheduler_patience', 10),
+            lr_scheduler_factor=train_cfg.get('lr_scheduler_factor', 0.5),
         )
 
         # Save full checkpoint (weights + arch + scaler stats)
@@ -208,15 +210,9 @@ def run_training(config):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Batch ML training for Lorenz surrogates.")
-    parser.add_argument(
-        'config',
-        nargs='?',
-        default='config.yml',
-        help="Path to YAML config (default: config.yml)",
-    )
+    parser = argparse.ArgumentParser(description='Train Lorenz surrogate model')
+    parser.add_argument('config', nargs='?', default='config.yml',
+                        help='Path to YAML config file (default: config.yml)')
     args = parser.parse_args()
     config = load_config(args.config)
-    print(f"Loaded config: {args.config}")
     run_training(config)

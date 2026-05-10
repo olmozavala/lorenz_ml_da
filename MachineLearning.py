@@ -11,6 +11,7 @@ class DenseNN(nn.Module):
     Input shape:  (batch, input_size * prev_time_steps)
     Output shape: (batch, output_size)
     """
+    stateful = False
     def __init__(self, input_size, prev_time_steps, output_size,
                  hidden_layers, hidden_activation, output_activation):
         super(DenseNN, self).__init__()
@@ -49,6 +50,7 @@ class ResDenseNN(nn.Module):
     Input shape:  (batch, input_size * prev_time_steps)
     Output shape: (batch, output_size)
     """
+    stateful = False
     def __init__(self, input_size, prev_time_steps, output_size,
                  hidden_layers, hidden_activation, output_activation):
         super(ResDenseNN, self).__init__()
@@ -89,8 +91,10 @@ class LSTMNN(nn.Module):
     fully-connected layer.
 
     Input shape:  (batch, input_size * prev_time_steps)
-    Output shape: (batch, output_size)
+    Output shape: (batch, output_size), hidden  — where hidden = (h_n, c_n)
     """
+    stateful = True
+
     def __init__(self, input_size, prev_time_steps, output_size,
                  hidden_size, num_layers=1):
         super(LSTMNN, self).__init__()
@@ -105,10 +109,9 @@ class LSTMNN(nn.Module):
     def forward(self, x, hidden=None):
         # x: (batch, input_size * prev_time_steps)
         x = x.view(-1, self.prev_time_steps, self.input_size)
-        # out: (batch, prev_time_steps, hidden_size)
-        out, hidden_out = self.lstm(x, hidden)
-        # Use only the last time-step's hidden state for prediction
-        return self.fc(out[:, -1, :]), hidden_out
+        # out: (batch, prev_time_steps, hidden_size); hidden = (h_n, c_n)
+        out, hidden = self.lstm(x, hidden)
+        return self.fc(out[:, -1, :]), hidden
 
 
 class RNN(nn.Module):
@@ -121,8 +124,10 @@ class RNN(nn.Module):
     fully-connected layer.
 
     Input shape:  (batch, input_size * prev_time_steps)
-    Output shape: (batch, output_size)
+    Output shape: (batch, output_size), hidden  — where hidden = h_n
     """
+    stateful = True
+
     def __init__(self, input_size, prev_time_steps, output_size,
                  hidden_size, num_layers=1, nonlinearity='tanh'):
         super(RNN, self).__init__()
@@ -138,10 +143,9 @@ class RNN(nn.Module):
     def forward(self, x, hidden=None):
         # x: (batch, input_size * prev_time_steps)
         x = x.view(-1, self.prev_time_steps, self.input_size)
-        # out: (batch, prev_time_steps, hidden_size)
-        out, hidden_out = self.rnn(x, hidden)
-        # Use only the last time-step's output for prediction
-        return self.fc(out[:, -1, :]), hidden_out
+        # out: (batch, prev_time_steps, hidden_size); hidden = h_n
+        out, hidden = self.rnn(x, hidden)
+        return self.fc(out[:, -1, :]), hidden
 
 
 def save_model(model, model_path, train_mean, train_std, architecture):

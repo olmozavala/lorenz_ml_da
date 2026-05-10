@@ -1,16 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=l63_training
-#SBATCH --output=logs/train_%j.out
-#SBATCH --error=logs/train_%j.err
+#SBATCH --output=/home/jv24b/github/lorenz_ml_da/logs/train_%j.out
+#SBATCH --error=/home/jv24b/github/lorenz_ml_da/logs/train_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=16
-#SBATCH --time=24:00:00
-#SBATCH --mail-type=END,FAIL
+#SBATCH --mem=16000M
+#SBATCH --mail-type=START,END,FAIL
 #SBATCH --mail-user=jvelasco@coaps.fsu.edu
-
+#SBATCH --partition=class
 
 # Path to my conda manager
 source /home/jv24b/miniconda3/etc/profile.d/conda.sh
+
+WORKING_DIR="/home/jv24b/github/lorenz_ml_da"
+cd $WORKING_DIR
 
 # Activate lorenzo env
 conda activate lorenzo
@@ -25,7 +28,8 @@ echo "ML_MODEL_CONFIG_FILE: $ML_MODEL_CONFIG_FILE"
 echo "Job started at: $(date +"%Y-%m-%d %H:%M:%S")"
 echo "Training started at: $(date +"%Y-%m-%d %H:%M:%S")"
 
-python Main_ML.py "$ML_MODEL_CONFIG_FILE"
+#python /home/jv24b/github/lorenz_ml_da/Main_ML.py "/home/jv24b/github/lorenz_ml_da/$ML_MODEL_CONFIG_FILE"
+python $WORKING_DIR/Main_ML.py $ML_MODEL_CONFIG_FILE
 TRAIN_EXIT=$?
 if [ $TRAIN_EXIT -ne 0 ]; then
     echo "Training failed with exit code $TRAIN_EXIT"
