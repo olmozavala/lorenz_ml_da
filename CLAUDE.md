@@ -27,8 +27,12 @@ python 0_LorenzDashboard.py       # http://localhost:5007
 # Interactive ML training studio (dataset gen, training, live loss plots)
 python 1_SingleMLTraining.py      # http://localhost:8050
 
-# Batch training driven by config.yml
-python Main_ML.py
+# Batch training driven by config.yml (optional: pass a custom config path)
+python Main_ML.py                     # uses config.yml
+python Main_ML.py my_experiment.yml   # custom config
+
+# SLURM (HPC cluster) — passes config file as first arg
+sbatch train.slurm [config_file.yml]
 
 # Comparative evaluation of saved models
 python ML_Model_Comparison.py
@@ -70,24 +74,13 @@ pytest tests/test_lorenz_systems.py::test_generate_trajectory_l63   # single tes
 | `RNN` | Vanilla RNN with same reshaping; `forward` returns `(output, hidden)`; `rnn_nonlinearity` is configurable (`'tanh'`/`'relu'`) |
 
 **`Training.py`** — Training loop and rollout logic:
-- `train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, rollout_schedule, val_rollout_steps, grad_clip, ...)` — gradient-descent loop; returns `(trained_model, history)`
-- `recursive_rollout(model, initial_input, num_steps, prev_time_steps, device)` → `(batch, num_steps, nx)` — autoregressive rollout used during training; passes `hidden` state between steps for recurrent models (`LSTMNN`, `RNN`). Window is shifted each step (drop oldest, append prediction); for `prev_time_steps > 1` overlapping frames are re-processed while `hidden` also carries — this windowed + carry-hidden behaviour is intentional and is the same semantics used by `SurrogateModel.rollout` / `batch_rollout`.
-- Multi-step loss: `Σ γ^s · loss_s` with γ=0.9
-- `EarlyStopping` — patience-based; resets patience when rollout depth increases
-- The training loop is a `while epoch < num_epochs:` loop (not a `for` loop), so early-stopping can jump to phase boundaries by reassigning `epoch` (the jump target is the current phase's cutoff, which is the first epoch of the next phase)
-- Gradient clipping (`torch.nn.utils.clip_grad_norm_`) is applied before every `optimizer.step()` — essential for BPTT stability on recurrent models, harmless for feedforward.
-
-Progressive rollout schedule — config-driven via `training.rollout_schedule` in `config.yml` (list of `[epoch_cutoff, rollout_steps]` pairs). Default schedule:
-
-| Epoch range | Rollout steps |
-|-------------|--------------|
-| 0–19 | 1 |
-| 20–59 | 2 |
-| 60–119 | 3 |
-| 120–199 | 4 |
-| 200+ | 5 |
-
-**Recurrent auto-skip:** `LSTMNN` and `RNN` automatically drop any schedule entry with `rollout_steps == 1` before training starts. A single-step rollout with `hidden=0` exercises none of the recurrent gates, so the phase would waste epochs (and early-stopping patience) training the LSTM as a gated MLP. Feedforward models keep the full schedule.
+- `train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, ..., max_rollout_steps, gamma, stateful_rollout, initial_lr, lr_phase_decay, lr_scheduler_patience, lr_scheduler_factor)` — gradient-descent loop; returns `(trained_model, history)`
+- `recursive_rollout(model, initial_input, num_steps, prev_time_steps, device, stateful_rollout=False)` → `(batch, num_steps, nx)` — autoregressive rollout; when `stateful_rollout=True` and model has `stateful=True`, hidden state is threaded across steps (BPTT). Window shifts each step (drop oldest, append prediction).
+- Multi-step loss: `Σ γ^s · loss_s`; γ defaults to 0.9 but is configurable via `training.rollout_gamma`
+- `EarlyStopping` — patience-based; when patience is exhausted and `rollout_steps < max_rollout_steps`, the phase advances (`rollout_steps += 1`), optimizer state is cleared, LR is decayed by `lr_phase_decay`, and a fresh `ReduceLROnPlateau` scheduler is created. Training only stops when patience is exhausted at `max_rollout_steps`.
+- Within each phase, `ReduceLROnPlateau` (patience=`lr_scheduler_patience`, factor=`lr_scheduler_factor`) reduces LR on plateau.
+- Validation uses the **same `rollout_steps`** as the current training phase — there is no separate fixed validation depth.
+- No gradient clipping is applied; stability for recurrent models is managed via the progressive phase schedule and `stateful_rollout`.
 
 **`datasets/LorenzDataset.py`** — PyTorch Dataset:
 - Generates trajectories via `LorenzSystems.generate_trajectory_fast()` (DAPyr + numbalsoda)
@@ -150,7 +143,7 @@ config.yml
   └─▶ DataLoader (train/val/test 70/20/10)
   └─▶ Model (DenseNN | ResDenseNN | LSTMNN | RNN)
         ├─ recursive_rollout with progressive depth
-        └─ Multi-step loss (γ=0.9 decay)
+        └─ Multi-step loss (γ decay, configurable)
   └─▶ Checkpoint .pth + sidecar .yml
   └─▶ SurrogateModel (inference)
   └─▶ EnKF assimilation cycles
@@ -190,11 +183,18 @@ training:
   batch_size: 2048
   learning_rate: 0.001
   n_trials: 1                # independent runs (each saved with timestamp)
-  early_stopping_patience: 20
+  early_stopping_patience: 30
+  early_stopping_min_delta: 1.0e-6  # minimum loss improvement to reset patience counter
   loss_func: 'MSE'           # 'MSE' | 'Huber'
   split_train: 70
   split_val: 20
   split_test: 10
+  max_rollout_steps: 20      # phases advance 1 → max_rollout_steps via patience
+  rollout_gamma: 0.95        # geometric decay weight for multi-step loss
+  stateful_rollout: true     # thread hidden state through rollout (RNN/LSTMNN only)
+  lr_phase_decay: 0.5        # multiply LR by this at each phase advance
+  lr_scheduler_patience: 10  # ReduceLROnPlateau patience within a phase
+  lr_scheduler_factor: 0.5   # ReduceLROnPlateau reduction factor
 
 paths:
   outputs: 'models'          # full checkpoints (.pth) + configs (.yml)
@@ -208,7 +208,6 @@ paths:
 - **Fixed state dimensions**: L96 is always N=40, L05 is always N=480 — hardcoded in DAPyr's Numba kernels. L63 is N=3.
 - **Normalization**: Always normalize inputs with saved `train_mean`/`train_std`; denormalize predictions. `SurrogateModel` does this automatically — raw models do not.
 - **Thread management**: `1_SingleMLTraining.py` sets `OMP/MKL/NUMBA_NUM_THREADS=1` to prevent oversubscription with its `ThreadPoolExecutor`.
-- **Validation rollout**: Depth set by `training.val_rollout_steps` (default 5) and held constant across the run — do not make it depend on the training phase.
+- **Validation rollout**: Uses the same `rollout_steps` as the current training phase — there is no separate fixed validation depth. Both train and val loss are computed with the current phase's depth.
 - **Cache invalidation**: The dataset cache key covers the full dataset config dict. Changing any dataset parameter (dt, ns, system_params, etc.) will trigger regeneration of all trajectory files.
-- **Recurrent model hidden state**: `LSTMNN` and `RNN` return `(output, hidden)` tuples. `recursive_rollout` passes the hidden state between autoregressive steps for these models; non-recurrent models (`DenseNN`, `ResDenseNN`) use the standard single-output path. Hidden state resets (`h=0`) at the start of every sample — consistent with DA usage, where each forecast cycle starts fresh via `SurrogateModel.rollout` (which calls `reset_hidden()` internally).
-- **Gradient clipping**: `torch.nn.utils.clip_grad_norm_` is applied on every training step (`training.grad_clip`, default `1.0`; set `0` to disable). Essential for recurrent BPTT stability.
+- **Recurrent model hidden state**: `LSTMNN` and `RNN` return `(output, hidden)` tuples. When `stateful_rollout=True`, `recursive_rollout` threads hidden state across autoregressive steps; when `False`, hidden resets per step. Hidden state always resets at the start of every sample/batch — consistent with DA usage where each forecast cycle starts fresh via `SurrogateModel.rollout` (which calls `reset_hidden()` internally).

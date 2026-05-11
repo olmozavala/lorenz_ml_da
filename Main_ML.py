@@ -184,7 +184,10 @@ def run_training(config):
 
         # Train
         optimizer      = torch.optim.Adam(model.parameters(), lr=train_cfg['learning_rate'])
-        early_stopping = EarlyStopping(patience=train_cfg['early_stopping_patience'])
+        early_stopping = EarlyStopping(
+            patience=train_cfg['early_stopping_patience'],
+            min_delta=train_cfg.get('early_stopping_min_delta', 0),
+        )
         train_model(
             model=model,
             model_name=model_name,

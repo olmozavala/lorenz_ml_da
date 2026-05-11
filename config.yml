@@ -31,6 +31,7 @@ training:
   learning_rate: 0.001
   n_trials: 1                # independent training runs (each saved separately)
   early_stopping_patience: 30
+  early_stopping_min_delta: 1.0e-6  # minimum improvement to reset patience counter
   loss_func: 'MSE'           # 'MSE' | 'Huber'
   split_train: 70            # % of dataset used for training
   split_val: 20              # % for validation  (remainder → test, not used in loop)
