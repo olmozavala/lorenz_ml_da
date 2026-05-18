@@ -28,4 +28,4 @@
 
 ## LSTMNN
 
-The best model so far is `LSTMNN_L63_trial1_1778503362` but there are still many thing to improve
+The best model so far is `LSTMNN_L63_trial1_1778503362` but there are still many things to improve.

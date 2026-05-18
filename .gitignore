@@ -168,6 +168,8 @@ figures/
 results/
 *_setup.yml
 logs/
+working_models.md
+
 
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
