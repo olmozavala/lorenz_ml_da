@@ -1,6 +1,7 @@
 
 import torch
 import torch.nn as nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.tensorboard import SummaryWriter
 from os.path import join
 
@@ -24,183 +25,108 @@ class EarlyStopping:
         return self.counter >= self.patience
 
 # Training loop
-def recursive_rollout(model, initial_input, num_steps, prev_time_steps, device):
+def recursive_rollout(model, initial_input, num_steps, prev_time_steps, device, stateful_rollout=False):
     """
     Performs a recursive rollout of the model for a given number of steps.
+    When stateful_rollout=True and model.stateful=True, hidden state is threaded
+    across steps (proper BPTT within the rollout); hidden is never carried across batches.
     """
     batch_size = initial_input.shape[0]
     nx = initial_input.shape[1] // prev_time_steps
-    
-    # initial_input is (batch, prev_time_steps * nx)
     current_input = initial_input.view(batch_size, prev_time_steps, nx)
     outputs_list = []
-    
+    hidden = None
+
     for _ in range(num_steps):
-        # Flatten for the model input
         model_in = current_input.reshape(batch_size, -1)
-        pred = model(model_in) # (batch, nx)
+        if getattr(model, 'stateful', False):
+            if stateful_rollout:
+                pred, hidden = model(model_in, hidden)
+            else:
+                pred, _ = model(model_in)
+        else:
+            pred = model(model_in)
         outputs_list.append(pred)
-        
-        # Roll the sequence: [s1, s2, s3] -> [s2, s3, pred]
-        # pred.unsqueeze(1) is (batch, 1, nx)
         current_input = torch.cat([current_input[:, 1:, :], pred.unsqueeze(1)], dim=1)
-        
-    return torch.stack(outputs_list, dim=1) # (batch, num_steps, nx)
+
+    return torch.stack(outputs_list, dim=1)  # (batch, num_steps, nx)
 
 # Training loop
-def train_model(model, model_name, train_loader, val_loader, criterion, optimizer, num_epochs, early_stopping, progress_callback=None, device='cpu'):
+def train_model(model, model_name, train_loader, val_loader, criterion, optimizer,
+                num_epochs, early_stopping, progress_callback=None, device='cpu',
+                max_rollout_steps=5, gamma=0.9, stateful_rollout=False,
+                initial_lr=0.001, lr_phase_decay=1.0,
+                lr_scheduler_patience=10, lr_scheduler_factor=0.5):
     writer = SummaryWriter(log_dir=f'runs/{model_name}')
-    best_val_loss = float('inf')
-    best_model_name = join('models',f'{model_name}_best_model.pth')
-    
-    model = model.to(device)
-    gamma = 0.9 # Decay factor for multi-step loss
-    last_rollout_steps = 0
-    
-    history = {'train_loss': [], 'val_loss': [], 'epochs': []}
-    
-    for epoch in range(num_epochs):
-        # Segmented schedule logic
-        if epoch < 20:
-            rollout_steps = 1
-        elif epoch < 60:
-            rollout_steps = 2
-        elif epoch < 120:
-            rollout_steps = 3
-        elif epoch < 200:
-            rollout_steps = 4
-        else:
-            rollout_steps = 5
-            
-        # Reset Early Stopping if rollout depth increases
-        if rollout_steps > last_rollout_steps:
-            early_stopping.counter = 0
-            early_stopping.best_loss = None 
-            last_rollout_steps = rollout_steps
+    best_model_name = join('models', f'{model_name}_best_model.pth')
 
+    model = model.to(device)
+    history = {'train_loss': [], 'val_loss': [], 'epochs': []}
+
+    epoch = 0
+    rollout_steps = 1
+    scheduler = ReduceLROnPlateau(optimizer, patience=lr_scheduler_patience, factor=lr_scheduler_factor)
+
+    while epoch < num_epochs:
+        # --- train ---
         model.train()
         train_loss = 0.0
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
-            
-            # Predict recursively
-            preds = recursive_rollout(model, inputs, rollout_steps, model.prev_time_steps, device)
-            
-            # Weighted loss across rollout steps
-            loss = 0
-            for s in range(rollout_steps):
-                step_loss = criterion(preds[:, s, :], targets[:, s, :])
-                loss += (gamma ** s) * step_loss
-            
+            preds = recursive_rollout(model, inputs, rollout_steps, model.prev_time_steps, device, stateful_rollout)
+            loss = sum((gamma ** s) * criterion(preds[:, s, :], targets[:, s, :]) for s in range(rollout_steps))
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * inputs.size(0)
-
         train_loss /= len(train_loader.dataset)
-        writer.add_scalar('Loss/train', train_loss, epoch)
 
+        # --- validate ---
         model.eval()
         val_loss = 0.0
-        val_rollout_steps = 5 
         with torch.no_grad():
             for inputs, targets in val_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
-                preds = recursive_rollout(model, inputs, val_rollout_steps, model.prev_time_steps, device)
-                
-                loss = 0
-                for s in range(val_rollout_steps):
-                    step_loss = criterion(preds[:, s, :], targets[:, s, :])
-                    loss += (gamma ** s) * step_loss
-                
+                preds = recursive_rollout(model, inputs, rollout_steps, model.prev_time_steps, device, stateful_rollout)
+                loss = sum((gamma ** s) * criterion(preds[:, s, :], targets[:, s, :]) for s in range(rollout_steps))
+                #preds = recursive_rollout(model, inputs, max_rollout_steps, model.prev_time_steps, device, stateful_rollout)
+                #loss = sum((gamma ** s) * criterion(preds[:, s, :], targets[:, s, :]) for s in range(max_rollout_steps))
                 val_loss += loss.item() * inputs.size(0)
-
         val_loss /= len(val_loader.dataset)
+
+        scheduler.step(val_loss)
+
+        writer.add_scalar('Loss/train', train_loss, epoch)
         writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('Rollout/steps', rollout_steps, epoch)
 
         history['epochs'].append(epoch + 1)
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)
 
-        if progress_callback:
-            if progress_callback(epoch + 1, train_loss, val_loss, rollout_steps):
-                print("Training stop requested via callback.")
-                break
+        if progress_callback and progress_callback(epoch + 1, train_loss, val_loss, rollout_steps):
+            print("Training stop requested via callback.")
+            break
 
-        # Save model if validation loss improves.
+        # save best model within current phase
         if early_stopping.best_loss is None or val_loss < early_stopping.best_loss:
-             torch.save(model.state_dict(), best_model_name)
+            torch.save(model.state_dict(), best_model_name)
 
         if early_stopping(val_loss):
-            if rollout_steps >= 5:
-                break 
-            # Advance to next phase
-            if rollout_steps == 1: epoch = 19
-            elif rollout_steps == 2: epoch = 59
-            elif rollout_steps == 3: epoch = 119
-            elif rollout_steps == 4: epoch = 199
+            if rollout_steps >= max_rollout_steps:
+                break
+            # advance phase
+            rollout_steps += 1
+            early_stopping.counter = 0
+            early_stopping.best_loss = None
+            new_lr = initial_lr * (lr_phase_decay ** (rollout_steps - 1))
+            optimizer.state.clear()
+            for group in optimizer.param_groups:
+                group['lr'] = new_lr
+            scheduler = ReduceLROnPlateau(optimizer, patience=lr_scheduler_patience, factor=lr_scheduler_factor)
+
+        epoch += 1
 
     writer.close()
     model.load_state_dict(torch.load(best_model_name, weights_only=False))
-    return model, history
-
-
-def train_esn_ridge(model, model_name, train_loader, val_loader, device,
-                    ridge_alpha=1e-6):
-    """
-    Train ESN readout via ridge regression (closed-form solution).
-
-    Steps:
-    1. Collect all reservoir states H and single-step targets Y from training set
-    2. Solve readout weights: W = (H^T H + alpha I)^{-1} H^T Y
-    3. Set model.readout weights to the solution
-    4. Evaluate on validation set
-    """
-    writer = SummaryWriter(log_dir=f'runs/{model_name}')
-    model = model.to(device)
-    model.eval()
-
-    # Step 1: Collect reservoir states and single-step targets
-    all_states = []
-    all_targets = []
-    with torch.no_grad():
-        for inputs, targets in train_loader:
-            inputs = inputs.to(device)
-            h = model._run_reservoir(inputs)       # (batch, reservoir_size)
-            all_states.append(h.cpu())
-            all_targets.append(targets[:, 0, :].cpu())  # single-step target
-
-    H = torch.cat(all_states, dim=0)    # (N_train, reservoir_size)
-    Y = torch.cat(all_targets, dim=0)   # (N_train, output_size)
-
-    # Step 2: Ridge regression closed-form
-    # W = (H^T H + alpha * I)^{-1} H^T Y
-    I = torch.eye(H.shape[1])
-    W = torch.linalg.solve(H.T @ H + ridge_alpha * I, H.T @ Y)
-    # W shape: (reservoir_size, output_size)
-
-    # Step 3: Set readout weights
-    with torch.no_grad():
-        model.readout.weight.copy_(W.T)     # nn.Linear weight is (out, in)
-        model.readout.bias.copy_((Y - H @ W).mean(dim=0))
-
-    # Step 4: Compute training loss
-    criterion = nn.MSELoss()
-    train_loss = criterion(H @ W, Y).item()
-    writer.add_scalar('Loss/train', train_loss, 0)
-
-    # Step 5: Validate
-    val_loss = 0.0
-    with torch.no_grad():
-        for inputs, targets in val_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            preds = model(inputs)
-            val_loss += criterion(preds, targets[:, 0, :]).item() * inputs.size(0)
-    val_loss /= len(val_loader.dataset)
-    writer.add_scalar('Loss/val', val_loss, 0)
-
-    writer.close()
-    print(f"ESN ridge regression — train_loss={train_loss:.6f}  val_loss={val_loss:.6f}")
-
-    history = {'train_loss': [train_loss], 'val_loss': [val_loss], 'epochs': [1]}
     return model, history

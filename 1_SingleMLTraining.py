@@ -19,6 +19,7 @@ import sys
 import traceback
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
+torch.set_default_dtype(torch.float64)
 
 # Limit PyTorch internal threads; parallelism is managed by ThreadPoolExecutor.
 torch.set_num_threads(1)
@@ -337,7 +338,14 @@ def training_thread_func(config):
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False)
         
-        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping, progress_callback=progress, device=device)
+        # TODO: expose rollout_schedule / val_rollout_steps / grad_clip in the UI.
+        # Defaults mirror config.yml so recurrent models auto-skip the steps=1 phase.
+        rollout_schedule  = [[20, 1], [60, 2], [120, 3], [200, 4], [10000, 5]]
+        val_rollout_steps = 5
+        grad_clip         = 1.0
+        train_model(model, model_name, train_loader, val_loader, criterion, optimizer, 500, early_stopping,
+                    rollout_schedule=rollout_schedule, val_rollout_steps=val_rollout_steps,
+                    grad_clip=grad_clip, progress_callback=progress, device=device)
         
         save_model(model, f"models/{model_name}", dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
         
@@ -675,7 +683,7 @@ def _eval_thread_func(config):
         all_hists = np.stack([t[:prev_steps] for t in truth_trajs])
         hists_norm = (all_hists - mean) / std
         input_seqs = torch.tensor(hists_norm.reshape(ens_size, -1),
-                                  dtype=torch.float32).to(device)
+                                  dtype=torch.float64).to(device)
 
         with torch.inference_mode():
             preds_norm = recursive_rollout(model, input_seqs,

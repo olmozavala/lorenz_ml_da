@@ -1,14 +1,19 @@
 import os
 import time
 import yaml
+import argparse
 import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader, random_split
 
 from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS
-from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN, ESN, save_model
-from Training import train_model, train_esn_ridge, EarlyStopping
+from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN, save_model
+from Training import train_model, EarlyStopping
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.set_default_dtype(torch.float64)
 
 
 def load_config(config_path='config.yml'):
@@ -127,30 +132,23 @@ def run_training(config):
             rnn_nonlin = model_cfg.get('rnn_nonlinearity', 'tanh')
             model = RNN(input_size, prev_steps, input_size, hidden_list[0],
                         nonlinearity=rnn_nonlin)
-        elif model_type == 'ESN':
-            esn_cfg = model_cfg.get('esn_params', {})
-            model = ESN(
-                input_size, prev_steps, input_size,
-                reservoir_size=hidden_list[0],
-                spectral_radius=esn_cfg.get('spectral_radius', 0.95),
-                sparsity=esn_cfg.get('sparsity', 0.9),
-                leaking_rate=esn_cfg.get('leaking_rate', 0.3),
-                input_scaling=esn_cfg.get('input_scaling', 1.0),
-            )
         else:
             raise ValueError(
                 f"Unknown model type '{model_type}'. "
-                "Expected 'DenseNN', 'ResDenseNN', 'LSTMNN', 'RNN', or 'ESN'."
+                "Expected 'DenseNN', 'ResDenseNN', 'LSTMNN', or 'RNN'."
             )
+        # Compile the model for faster training
+        # model = torch.compile(model)
 
         arch_meta = {
-            'model_type':      model_type,
-            'input_size':      input_size,
-            'prev_time_steps': prev_steps,
-            'hidden_layers':   hidden_list,
-            'system':          sys_type,
-            'N':               input_size,   # legacy field; same as input_size
-            'system_params':   sys_params,   # stored for eval reconstruction
+            'model_type':        model_type,
+            'input_size':        input_size,
+            'prev_time_steps':   prev_steps,
+            'hidden_layers':     hidden_list,
+            'hidden_activation': model_cfg.get('hidden_activation', 'ReLU'),
+            'system':            sys_type,
+            'N':                 input_size,   # legacy field; same as input_size
+            'system_params':     sys_params,   # stored for eval reconstruction
         }
 
         model_name = f"{model_type}_L{sys_type}_trial{trial}_{int(time.time())}"
@@ -158,23 +156,30 @@ def run_training(config):
 
         # Save YAML config immediately — available even if training stops early
         run_config = {
-            'model_type':      model_type,
-            'system_type':     sys_type,
-            'dt':              dataset_cfg['dt'],
-            'save_dt':         dataset_cfg['save_dt'],
-            'prev_steps':      prev_steps,
-            'num_locs':        dataset_cfg.get('num_start_locations', 1),
-            'samples_per_loc': dataset_cfg['ns'],
-            'batch_size':      train_cfg['batch_size'],
-            'patience':        train_cfg['early_stopping_patience'],
-            'hidden_layers':   str(hidden_list),
-            'loss_func':       loss_name,
-            'split_train':     split_train,
-            'split_val':       split_val,
-            'split_test':      split_test,
-            'architecture':    arch_meta,
-            'train_mean':      dataset.scaler.mean_.tolist(),
-            'train_std':       dataset.scaler.scale_.tolist(),
+            'model_type':          model_type,
+            'system_type':         sys_type,
+            'dt':                  dataset_cfg['dt'],
+            'save_dt':             dataset_cfg['save_dt'],
+            'prev_steps':          prev_steps,
+            'num_locs':            dataset_cfg.get('num_start_locations', 1),
+            'samples_per_loc':     dataset_cfg['ns'],
+            'batch_size':          train_cfg['batch_size'],
+            'patience':            train_cfg['early_stopping_patience'],
+            'hidden_layers':       str(hidden_list),
+            'rnn_nonlinearity':    model_cfg.get('rnn_nonlinearity', None),
+            'loss_func':           loss_name,
+            'split_train':         split_train,
+            'split_val':           split_val,
+            'split_test':          split_test,
+            'max_rollout_steps':   train_cfg.get('max_rollout_steps', 5),
+            'rollout_gamma':       train_cfg.get('rollout_gamma', 0.9),
+            'stateful_rollout':    train_cfg.get('stateful_rollout', False),
+            'lr_phase_decay':      train_cfg.get('lr_phase_decay', 1.0),
+            'lr_scheduler_patience': train_cfg.get('lr_scheduler_patience', 10),
+            'lr_scheduler_factor': train_cfg.get('lr_scheduler_factor', 0.5),
+            'architecture':        arch_meta,
+            'train_mean':          dataset.scaler.mean_.tolist(),
+            'train_std':           dataset.scaler.scale_.tolist(),
         }
         yml_path = os.path.join(paths_cfg['outputs'], f"{model_name}.yml")
         with open(yml_path, 'w') as f:
@@ -182,26 +187,29 @@ def run_training(config):
         print(f"Config saved → {yml_path}")
 
         # Train
-        if model_type == 'ESN':
-            esn_cfg = model_cfg.get('esn_params', {})
-            model, history = train_esn_ridge(
-                model, model_name, train_loader, val_loader, device,
-                ridge_alpha=esn_cfg.get('ridge_alpha', 1e-6),
-            )
-        else:
-            optimizer      = torch.optim.Adam(model.parameters(), lr=train_cfg['learning_rate'])
-            early_stopping = EarlyStopping(patience=train_cfg['early_stopping_patience'])
-            train_model(
-                model=model,
-                model_name=model_name,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                criterion=criterion,
-                optimizer=optimizer,
-                num_epochs=train_cfg['num_epochs'],
-                early_stopping=early_stopping,
-                device=device,
-            )
+        optimizer      = torch.optim.Adam(model.parameters(), lr=train_cfg['learning_rate'])
+        early_stopping = EarlyStopping(
+            patience=train_cfg['early_stopping_patience'],
+            min_delta=train_cfg.get('early_stopping_min_delta', 0),
+        )
+        train_model(
+            model=model,
+            model_name=model_name,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            num_epochs=train_cfg['num_epochs'],
+            early_stopping=early_stopping,
+            device=device,
+            max_rollout_steps=train_cfg.get('max_rollout_steps', 5),
+            gamma=train_cfg.get('rollout_gamma', 0.9),
+            stateful_rollout=train_cfg.get('stateful_rollout', False),
+            initial_lr=train_cfg['learning_rate'],
+            lr_phase_decay=train_cfg.get('lr_phase_decay', 1.0),
+            lr_scheduler_patience=train_cfg.get('lr_scheduler_patience', 10),
+            lr_scheduler_factor=train_cfg.get('lr_scheduler_factor', 0.5),
+        )
 
         # Save full checkpoint (weights + arch + scaler stats)
         save_model(model, save_path, dataset.scaler.mean_, dataset.scaler.scale_, arch_meta)
@@ -209,5 +217,9 @@ def run_training(config):
 
 
 if __name__ == "__main__":
-    config = load_config()
+    parser = argparse.ArgumentParser(description='Train Lorenz surrogate model')
+    parser.add_argument('config', nargs='?', default='config.yml',
+                        help='Path to YAML config file (default: config.yml)')
+    args = parser.parse_args()
+    config = load_config(args.config)
     run_training(config)
