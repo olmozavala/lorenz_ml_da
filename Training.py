@@ -89,6 +89,8 @@ def train_model(model, model_name, train_loader, val_loader, criterion, optimize
                 inputs, targets = inputs.to(device), targets.to(device)
                 preds = recursive_rollout(model, inputs, rollout_steps, model.prev_time_steps, device, stateful_rollout)
                 loss = sum((gamma ** s) * criterion(preds[:, s, :], targets[:, s, :]) for s in range(rollout_steps))
+                #preds = recursive_rollout(model, inputs, max_rollout_steps, model.prev_time_steps, device, stateful_rollout)
+                #loss = sum((gamma ** s) * criterion(preds[:, s, :], targets[:, s, :]) for s in range(max_rollout_steps))
                 val_loss += loss.item() * inputs.size(0)
         val_loss /= len(val_loader.dataset)
 

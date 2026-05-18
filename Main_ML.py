@@ -11,6 +11,8 @@ from datasets.LorenzDataset import LorenzDataset, _SYSTEM_DIMS
 from MachineLearning import DenseNN, ResDenseNN, LSTMNN, RNN, save_model
 from Training import train_model, EarlyStopping
 
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 torch.set_default_dtype(torch.float64)
 
 
@@ -135,6 +137,8 @@ def run_training(config):
                 f"Unknown model type '{model_type}'. "
                 "Expected 'DenseNN', 'ResDenseNN', 'LSTMNN', or 'RNN'."
             )
+        # Compile the model for faster training
+        # model = torch.compile(model)
 
         arch_meta = {
             'model_type':        model_type,

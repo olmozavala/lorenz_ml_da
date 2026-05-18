@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=16
 #SBATCH --mem=16000M
-#SBATCH --mail-type=START,END,FAIL
+#SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jvelasco@coaps.fsu.edu
 #SBATCH --partition=class
 

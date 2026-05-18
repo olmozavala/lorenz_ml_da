@@ -22,18 +22,9 @@ def init_models(n_steps):
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1776975564_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1776975895_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1776975895_best_model.pth'),
-        }
-    elif n_steps == 4:
-        print("Initializing 4 time step models")
-        model_paths = {
-            'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1774989212_best_model.pth'),
-            'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1774989274_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1774989300_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1774989331_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775047936_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1778503362_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1778499778_best_model.pth'),
+            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1778607803_best_model.pth'),
         }
     else:
         raise ValueError(f"Invalid number of steps: {n_steps}")
@@ -92,7 +83,6 @@ for e in tqdm.tqdm(range(Ne), desc="Running Lorenz63", unit="member", leave=Fals
 lorenz_series = np.stack(lorenz_pools)
 print(f"Ensemble pool ready for Lorenz63 (baseline)")
     
-# %%
 for model_type in surrogates.keys():
     fig, ax = plt.subplots(3, 1, figsize=(10, 12))
 

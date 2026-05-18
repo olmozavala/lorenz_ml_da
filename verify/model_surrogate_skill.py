@@ -21,18 +21,9 @@ def init_models(n_steps):
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1775267969_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1775269773_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775269849_best_model.pth'),
-        }
-    elif n_steps == 4:
-        print("Initializing 4 time step models")
-        model_paths = {
-            'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1774989212_best_model.pth'),
-            'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1774989274_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1774989300_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1774989331_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775047936_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1778503362_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1778499778_best_model.pth'),
+            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1778607803_best_model.pth'),
         }
     else:
         raise ValueError(f"Invalid number of steps: {n_steps}")
@@ -95,7 +86,10 @@ ax[0].set_xlabel('X')
 ax[0].set_ylabel('Y')
 ax[0].set_zlabel('Z')
 ax[0].set_title(f'Lorenz63 Attractor Comparison - {init_steps} time steps')
+plt.savefig(f'outputs/lorenz63_attractor_comparison_{init_steps}_3d.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
 plt.show()
+plt.close()
+print(f'Saved lorenz63_attractor_comparison_{init_steps}_3d.png')
 
 # %% k-RMSE
 @torch.no_grad()
