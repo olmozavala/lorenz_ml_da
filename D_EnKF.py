@@ -12,7 +12,7 @@ import os
 from os.path import join
 from SurrogateModel import SurrogateModel
 from lorenz.lorenz_systems import LorenzSystems
-from EnKF_core import EnKFConfig, create_localization_matrix, make_surrogate_forecaster, make_lorenz_forecaster, run_enkf
+from EnKF_core import EnKFConfig, make_surrogate_forecaster, make_lorenz_forecaster, run_enkf
 
 torch.set_default_dtype(torch.float64)
 
@@ -22,11 +22,11 @@ os.makedirs("figures", exist_ok=True)
 _fig_count = [0]
 
 # Global configuration parameters
-_T = 50
+_T = 100
 _M = 50
-_Ne = 20
+_Ne = 50
 _CORE_SEED = 10
-_NE_MAX = 200
+_NE_MAX = 100
 
 def _print_benchmark_table(results, title=""):
     """Print a summary DataFrame for a set of results."""
@@ -71,18 +71,9 @@ def init_models(n_steps):
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1775267969_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1775269773_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775269849_best_model.pth'),
-        }
-    elif n_steps == 4:
-        print("Initializing 4 time step models")
-        model_paths = {
-            'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1774989212_best_model.pth'),
-            'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1774989274_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1774989300_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1774989331_best_model.pth'),
-            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1775047936_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1779133789_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779133920_best_model.pth'),
+            'RNN_relu': join(model_dir, 'RNN_L63_trial1_1779117546_best_model.pth'),
         }
     else:
         raise ValueError(f"Invalid number of steps: {n_steps}")
@@ -162,10 +153,8 @@ M_spinup = len(np.arange(0, 10, dt))
 Xf_pools = {}
 for name, model in surrogates.items():
     pool = Xf_pool.copy()
-    for e in range(Ne_total):
-        sol = model.rollout(pool[e, :], num_steps=M_spinup)
-        pool[e, :] = sol[-1, :]
-    Xf_pools[name] = pool
+    sol = model.batch_rollout(pool.reshape(Ne_total, 1, Nx), num_steps=M_spinup)
+    Xf_pools[name] = sol[:, -1, :]                                       #[Ne_total, M_spinup+1, Nx]
     print(f"  Ensemble pool ready for {name}")
 
 # Lorenz baseline pool (perfect model)
@@ -180,28 +169,6 @@ print(f"  Ensemble pool ready for Lorenz63 (baseline)")
 traj_truth_spinup = LorenzSystems.generate_trajectory_fast('63', xt, dt, M_spinup + 1)
 xt = traj_truth_spinup[-1, :]
 
-
-# ============================================================
-# Core EnKF cycle
-# ============================================================
-def make_surrogate_forecaster(surrogate, M):
-    """Wrap a SurrogateModel into a forecast callable.
-    Returns full trajectory (M+1, Nx) including the initial state."""
-    def forecaster(state):
-        sol = surrogate.rollout(state, num_steps=M)  # (M, Nx)
-        sol = np.asarray(sol)
-        # Prepend initial state for a continuous trajectory
-        init = np.asarray(state).reshape(1, -1)
-        return np.vstack([init, sol])  # (M+1, Nx)
-    return forecaster
-
-def make_lorenz_forecaster(dt, M):
-    """Wrap the Lorenz solver into a forecast callable.
-    Returns full trajectory (M+1, Nx) including the initial state."""
-    def forecaster(state):
-        traj = LorenzSystems.generate_trajectory_fast('63', np.asarray(state), dt, M + 1)
-        return traj  # (M+1, Nx) — already includes initial state
-    return forecaster
 
 # ============================================================
 # Benchmark runner
@@ -255,11 +222,11 @@ plot_spread_vs_rmse(results_base, surrogates_palette, cfg_base, f" — Baseline_
 # Spaghetti: compare all models for each variable
 for v in range(Nx):
     plot_ensemble_spaghetti_multi(results_base, surrogates_palette, cfg_base,
-                                  cycle_range=(35, 50), var_idx=v)
+                                  cycle_range=(1, 10), var_idx=v)
 
 # Detailed spaghetti + spread reduction for each architecture
 plot_spread_reduction_multi(results_base, surrogates_palette, cfg_base,
-                             cycle_range=(35, 50), var_idx=0)
+                             cycle_range=(1, 10), var_idx=0)
 #for name in results_base:
     #plot_ensemble_spaghetti(results_base[name], name, surrogates_palette, cfg_base,
     #                        cycle_range=(3, 8))

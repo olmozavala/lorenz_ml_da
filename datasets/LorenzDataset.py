@@ -20,7 +20,7 @@ _SYSTEM_IC_CENTER = {'63': 0.0, '96': 8.0, '05': 15.0}
 class LorenzDataset(Dataset):
     # Number of future target steps returned by __getitem__.
     # Must stay in sync with Training.py (recursive_rollout target length).
-    _MAX_FUTURE = 20
+    _MAX_FUTURE = 100
 
     def __init__(self, system_type='63', x0=None, dt=0.01, Ns=5000, save_Dt=10,
                  std=0.000, prev_time_steps=1, num_start_locations=1, ds_noise=False,

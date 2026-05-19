@@ -169,6 +169,7 @@ results/
 *_setup.yml
 logs/
 working_models.md
+*.txt
 
 
 # PyCharm

@@ -21,8 +21,8 @@ def init_models(n_steps):
         model_paths = {
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
-            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1778600889_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1778595234_best_model.pth'),
+            'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1779133789_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779133920_best_model.pth'),
             'RNN_relu': join(model_dir, 'RNN_L63_trial1_1779117546_best_model.pth'),
         }
     else:
@@ -74,7 +74,7 @@ traj_surrogates = {
 }
 
 # %% 3D plot comparison
-cut_off = 10_000# 20000 steps = 200 time units = 181.2 Lyapunov times
+cut_off = 2_000# 20000 steps = 200 time units = 181.2 Lyapunov times
 fig = plt.figure(figsize=(30, 10))
 ax = [fig.add_subplot(1, 1, 1, projection="3d")]
 ax[0].scatter(history[:,0], history[:,1], history[:,2], color='red', label='initialization')

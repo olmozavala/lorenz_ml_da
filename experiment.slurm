@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=l63_training
+#SBATCH --job-name=l63_experiment
 #SBATCH --output=/home/jv24b/github/lorenz_ml_da/logs/train_%j.out
 #SBATCH --error=/home/jv24b/github/lorenz_ml_da/logs/train_%j.err
-#SBATCH --nodes=1
+#SBATCH --nodes=10
 #SBATCH --ntasks=16
 #SBATCH --mem=16000M
 #SBATCH --mail-type=END,FAIL
@@ -21,15 +21,12 @@ conda activate lorenzo
 # Ensure conda's newer libstdc++ is used (avoids GLIBCXX_* import errors)
 export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}"
 
-ML_MODEL_CONFIG_FILE="${1:-config.yml}"
-echo "ML_MODEL_CONFIG_FILE: $ML_MODEL_CONFIG_FILE"
-
 # Launch training
-echo "Job started at: $(date +"%Y-%m-%d %H:%M:%S")"
-echo "Training started at: $(date +"%Y-%m-%d %H:%M:%S")"
+    echo "Job started at: $(date +"%Y-%m-%d %H:%M:%S")"
+    echo "Training started at: $(date +"%Y-%m-%d %H:%M:%S")"
 
-#python /home/jv24b/github/lorenz_ml_da/Main_ML.py "/home/jv24b/github/lorenz_ml_da/$ML_MODEL_CONFIG_FILE"
-python -u $WORKING_DIR/Main_ML.py $ML_MODEL_CONFIG_FILE
+
+python -u $WORKING_DIR/ms_denkf.py
 TRAIN_EXIT=$?
 if [ $TRAIN_EXIT -ne 0 ]; then
     echo "Training failed with exit code $TRAIN_EXIT"

@@ -2,6 +2,7 @@ import numpy as np
 from scipy.linalg import sqrtm
 from lorenz.lorenz_systems import LorenzSystems
 from SurrogateModel import SurrogateModel
+from metrics import energy_score
 
 # ============================================================
 # EnKF configuration dataclass
@@ -53,21 +54,40 @@ def create_localization_matrix(r, n):
 # Surrogate model forecaster
 def make_surrogate_forecaster(surrogate, M):
     """Wrap a SurrogateModel into a forecast callable.
-    Returns full trajectory (M+1, Nx) including the initial state."""
-    def forecaster(state):
-        sol = surrogate.rollout(state, num_steps=M)
-        sol = np.asarray(sol)
-        init = np.asarray(state).reshape(1, -1)
-        return np.vstack([init, sol])
+    Accepts a single state (Nx,) or an ensemble (Nx, Ne). Returns trajectories
+    (M+1, Nx) or (Ne, M+1, Nx), including the initial state.
+    """
+    def forecaster(states):
+        states = np.asarray(states)
+        if states.ndim == 1:
+            sol = np.asarray(surrogate.rollout(states, num_steps=M))
+            return np.vstack([states.reshape(1, -1), sol])
+        # EnKF layout (Nx, Ne) -> batch_rollout (Ne, 1, Nx) via flat (Ne, Nx)
+        sol = surrogate.batch_rollout(states.T, num_steps=M)  # (Ne, M, Nx)
+        out = np.empty((states.shape[1], M + 1, states.shape[0]))
+        out[:, 0, :] = states.T
+        out[:, 1:, :] = sol
+        return out
     return forecaster
 
 # Lorenz system forecaster
-def make_lorenz_forecaster(dt, M):
+def make_lorenz_forecaster(dt, M, system_type='63'):
     """Wrap the Lorenz solver into a forecast callable.
-    Returns full trajectory (M+1, Nx) including the initial state."""
-    def forecaster(state):
-        traj = LorenzSystems.generate_trajectory_fast('63', np.asarray(state), dt, M + 1)
-        return traj
+
+    Accepts a single state (Nx,) or an ensemble (Nx, Ne). Returns trajectories
+    (M+1, Nx) or (Ne, M+1, Nx), including the initial state.
+    """
+    def forecaster(states):
+        states = np.asarray(states)
+        if states.ndim == 1:
+            return LorenzSystems.generate_trajectory_fast(
+                system_type, states, dt, M + 1)
+        trajs = [
+            LorenzSystems.generate_trajectory_fast(
+                system_type, states[:, e], dt, M + 1)
+            for e in range(states.shape[1])
+        ]
+        return np.stack(trajs, axis=0)  # (Ne, M+1, Nx)
     return forecaster
 
 # EnKF experiment runner
@@ -92,6 +112,9 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
         'errorf'  : np.ndarray (T,)  – forecast RMSE per cycle
         'errora'  : np.ndarray (T,)  – analysis RMSE per cycle
         'spread'  : np.ndarray (T,)  – ensemble spread per cycle
+        'errorf_es', 'errora_es' : np.ndarray (T,) – Energy Score per cycle
+        'errorf_es_acc', 'errorf_es_spr', 'errora_es_acc', 'errora_es_spr'
+            : np.ndarray (T,) – ES accuracy / spread decomposition
         'xt_traj' : np.ndarray (T, Nx) – true state at each cycle
         'xf_traj' : np.ndarray (T, Nx) – forecast mean at each cycle
         'xa_traj' : np.ndarray (T, Nx) – analysis mean at each cycle
@@ -128,6 +151,14 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
     Xf_all = np.zeros((cfg.T, Nx, cfg.Ne))
     Xa_all = np.zeros((cfg.T, Nx, cfg.Ne))
 
+    # Energy Score and its decomposition (accuracy / spread terms)
+    errorf_es = np.zeros(cfg.T)
+    errora_es = np.zeros(cfg.T)
+    errorf_es_acc = np.zeros(cfg.T)
+    errorf_es_spr = np.zeros(cfg.T)
+    errora_es_acc = np.zeros(cfg.T)
+    errora_es_spr = np.zeros(cfg.T)
+
     # Storage — full inter-cycle trajectories
     # ens_fcst_traj[k, e, :, :] = trajectory of member e from analysis at cycle k
     #                              to forecast at cycle k+1, shape (M+1, Nx)
@@ -144,6 +175,12 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
             errorf[k:] = np.nan
             errora[k:] = np.nan
             spread[k:] = np.nan
+            errorf_es[k:] = np.nan
+            errora_es[k:] = np.nan
+            errorf_es_acc[k:] = np.nan
+            errorf_es_spr[k:] = np.nan
+            errora_es_acc[k:] = np.nan
+            errora_es_spr[k:] = np.nan
             diverged = True
             break
 
@@ -156,6 +193,12 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
 
         # Forecast RMSE
         errorf[k] = np.linalg.norm(xf_k - xt_k)
+
+        # Forecast Energy Score (uniform weights, full state)
+        es_f, acc_f, spr_f = energy_score(Xf_k, xt_k)
+        errorf_es[k] = es_f
+        errorf_es_acc[k] = acc_f
+        errorf_es_spr[k] = spr_f
 
         # Store trajectories
         xt_traj[k] = xt_k
@@ -216,11 +259,22 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
         xa_traj[k] = xa_k
         Xa_all[k] = Xa_k.copy()
 
+        # Analysis Energy Score (uniform weights, full state)
+        es_a, acc_a, spr_a = energy_score(Xa_k, xt_k)
+        errora_es[k] = es_a
+        errora_es_acc[k] = acc_a
+        errora_es_spr[k] = spr_a
+
         # --- Forecast to next cycle (store full trajectories) ---
-        for e in range(cfg.Ne):
-            traj_e = forecast_fn(Xa_k[:, e])       # (M+1, Nx)
-            ens_fcst_traj[k, e, :, :] = traj_e
-            Xf_k[:, e] = traj_e[-1, :]             # final state is the next forecast
+        #for e in range(cfg.Ne):
+        #    traj_e = forecast_fn(Xa_k[:, e])       # (M+1, Nx)
+        #    ens_fcst_traj[k, e, :, :] = traj_e
+        #    Xf_k[:, e] = traj_e[-1, :]             # final state is the next forecast
+
+        # Using the fast batch rollout function
+        traj_e = forecast_fn(Xa_k)              # (Ne, M+1, Nx)
+        ens_fcst_traj[k, :, :, :] = traj_e
+        Xf_k = traj_e[:, -1, :].T               # (Nx, Ne)
 
         # Truth forward (always the real Lorenz solver)
         xt_next = LorenzSystems.generate_trajectory_fast('63', xt_k, cfg.dt, cfg.M + 1)
@@ -231,6 +285,12 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
         'errorf': errorf,
         'errora': errora,
         'spread': spread,
+        'errorf_es': errorf_es,
+        'errora_es': errora_es,
+        'errorf_es_acc': errorf_es_acc,
+        'errorf_es_spr': errorf_es_spr,
+        'errora_es_acc': errora_es_acc,
+        'errora_es_spr': errora_es_spr,
         'xt_traj': xt_traj,
         'xf_traj': xf_traj,
         'xa_traj': xa_traj,

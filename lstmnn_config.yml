@@ -1,0 +1,50 @@
+# Lorenz ML-DA — batch training configuration for Main_ML.py
+#
+# All keys here map 1-to-1 with the sidebar of 1_SingleMLTraining.py.
+
+dataset:
+  system_type: '63'          # '63' (L63) | '96' (L96, N=40) | '05' (L05 Model III, N=480)
+  dt: 0.001                  # integration time step
+  ns: 100000                 # samples per start location (Ns)
+  save_dt: 10                # subsampling factor  →  effective Δt = dt × save_dt
+  std: 1.0                   # observation noise std  (0 = clean trajectories)
+  prev_time_steps: 1         # history window size fed to the model
+  ds_noise: false            # add noise to the dataset
+  num_start_locations: 20    # number of independent random-IC trajectories
+
+  # Physics parameters — ignored for L63 (uses fixed σ=10/ρ=28/β=8/3)
+  # L96:  {F: 8.0}
+  # L05:  {F: 15.0, K: 32}
+  system_params: {F: 15.0, K: 32, l05_c: 0.6, l05_b: 10.0}
+
+model:
+  type: 'LSTMNN'         # 'DenseNN' | 'ResDenseNN' | 'LSTMNN' | 'RNN'
+  # 64, 64, 32 is a good configuration for L63
+  hidden_layers: [64]
+  hidden_activation: 'ReLU'  # 'ReLU' | 'Tanh' | 'Sigmoid'
+  output_activation: null
+  rnn_nonlinearity: 'relu'   # RNN only: 'tanh' | 'relu'
+
+training:
+  num_epochs: 10000
+  batch_size: 2048
+  learning_rate: 0.001
+  n_trials: 1                # independent training runs (each saved separately)
+  early_stopping_patience: 30
+  early_stopping_min_delta: 1.0e-6  # minimum improvement to reset patience counter
+  loss_func: 'MSE'           # 'MSE' | 'Huber'
+  split_train: 70            # % of dataset used for training
+  split_val: 20              # % for validation  (remainder → test, not used in loop)
+  split_test: 10
+  max_rollout_steps: 100      # replaces hardcoded 5; val also uses this
+  rollout_gamma: 0.95        # replaces hardcoded 0.9
+  stateful_rollout: true     # thread hidden state through rollout (RNN/LSTMNN only)
+  lr_phase_decay: 0.75        # multiply LR by this factor at each phase advance
+  lr_scheduler_patience: 10  # ReduceLROnPlateau patience within a phase
+  lr_scheduler_factor: 0.5   # ReduceLROnPlateau reduction factor
+
+paths:
+  outputs: 'models'         # full checkpoints (.pth) + configs (.yml) saved here
+  models: 'models'           # (reserved for dashboard-trained models)
+  runs: 'runs'               # TensorBoard logs
+  dataset_cache: 'dataset_cache'  # cached Lorenz trajectories
