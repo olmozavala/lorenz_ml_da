@@ -1,6 +1,7 @@
 # %%
 from os.path import join
 from SurrogateModel import SurrogateModel
+from MachineLearning import LSTMNN, RNN
 from lorenz.lorenz_systems import LorenzSystems
 import numpy as np
 import torch
@@ -22,7 +23,7 @@ def init_models(n_steps):
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
             'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1779133789_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779133920_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779205626_best_model.pth'),
             'RNN_relu': join(model_dir, 'RNN_L63_trial1_1779117546_best_model.pth'),
         }
     else:
@@ -46,7 +47,7 @@ def init_models(n_steps):
         'RNN_tanh': SurrogateModel(model_paths['RNN_tanh']),
     }
 
-    return surrogates, surrogates_palette
+    return surrogates, surrogates_palette, model_paths
 
 VAR_NAMES = ['x', 'y', 'z']
 
@@ -54,7 +55,7 @@ VAR_NAMES = ['x', 'y', 'z']
 init_steps = 1
 
 # Initialize surrogate models
-surrogates, surrogates_palette = init_models(init_steps)
+surrogates, surrogates_palette, model_paths = init_models(init_steps)
 
 x0 = np.array([1.0, 1.0, 1.1])
 dt = 0.01
@@ -74,7 +75,7 @@ traj_surrogates = {
 }
 
 # %% 3D plot comparison
-cut_off = 2_000# 20000 steps = 200 time units = 181.2 Lyapunov times
+cut_off = 4_000# 20000 steps = 200 time units = 181.2 Lyapunov times
 fig = plt.figure(figsize=(30, 10))
 ax = [fig.add_subplot(1, 1, 1, projection="3d")]
 ax[0].scatter(history[:,0], history[:,1], history[:,2], color='red', label='initialization')
@@ -97,8 +98,8 @@ def rollout(model, history0, K):
     """
     Autoregressively roll a windowed surrogate forward K steps.
 
-    This matches `SurrogateModel.predict()` which consumes a history window
-    of length `model.prev_time_steps` (oldest-first) to predict the next state.
+    Uses ``SurrogateModel.batch_rollout`` so each batch member has an
+    independent hidden state (required for RNN/LSTM).
 
     Parameters
     ----------
@@ -129,19 +130,8 @@ def rollout(model, history0, K):
     if p_in != p:
         raise ValueError(f"history0 has p={p_in} but model.prev_time_steps={p}")
 
-    # Each predict() uses batch size 1; size any reset to match (not B).
-    reset = getattr(model, "reset_hidden", None)
-    if callable(reset):
-        reset(batch_size=1)
-
-    windows = history0.copy()  # (B, p, N) physical space
-    preds = np.empty((K, B, N), dtype=np.float64)
-
-    for k in range(K):
-        # SurrogateModel.predict is single-sample; loop over batch for now.
-        next_states = np.stack([model.predict(windows[b]) for b in range(B)], axis=0)  # (B, N)
-        preds[k] = next_states
-        windows = np.concatenate([windows[:, 1:, :], next_states[:, None, :]], axis=1)
+    out = model.batch_rollout(history0, K)  # (B, K, N)
+    preds = np.transpose(out, (1, 0, 2))      # (K, B, N)
 
     if squeeze_batch:
         return preds[:, 0, :]
@@ -603,9 +593,10 @@ df = attractor_summary_table(traj_surrogates)
 THEORETICAL_LLE = 0.9056
 
 def compute_lle(
-    forward_model,
+    forward_ref,
     x0,
-    dt = 0.01,
+    forward_pert=None,
+    dt=0.01,
     n_steps=100_000,
     n_spinup=1_000,
     d0=1e-8,
@@ -616,11 +607,15 @@ def compute_lle(
  
     Parameters
     ----------
-    forward_model : callable
+    forward_ref : callable
         Black-box model: state(t) -> state(t + dt).
-        Signature: forward_model(state) -> np.ndarray
+        Signature: forward_ref(state) -> np.ndarray
     x0 : np.ndarray
         Initial condition (e.g. shape (3,) for Lorenz-63).
+    forward_pert : callable, optional
+        Forward map for the perturbed trajectory. Defaults to ``forward_ref``.
+        For stateful RNN/LSTM surrogates, pass a second ``SurrogateModel``
+        instance so hidden state is not shared between branches.
     dt : float
         Time step used by forward_model.
     n_steps : int
@@ -642,20 +637,23 @@ def compute_lle(
         Running estimate of LLE at each renormalization event
         (useful for convergence diagnostics).
     """
- 
+    if forward_pert is None:
+        forward_pert = forward_ref
+
     state_dim = x0.shape[0]
  
-    # --- spin-up: let the reference trajectory reach the attractor ---
+    # --- spin-up: both branches reach the attractor with aligned hidden state ---
     x_ref = x0.copy()
+    x_pert = x0.copy()
     for _ in range(n_spinup):
-        x_ref = forward_model(x_ref)
+        x_ref = forward_ref(x_ref)
+        x_pert = forward_pert(x_pert)
  
     # --- initial perturbation (random direction, magnitude d0) ---
     delta = np.random.randn(state_dim)
     delta = delta / np.linalg.norm(delta) * d0
  
     x_pert = x_ref + delta
-    
  
     # --- main loop ---
     log_growth_sum = 0.0
@@ -664,8 +662,8 @@ def compute_lle(
  
     for step in range(1, n_steps + 1):
         # propagate both trajectories
-        x_ref = forward_model(x_ref)
-        x_pert = forward_model(x_pert)
+        x_ref = forward_ref(x_ref)
+        x_pert = forward_pert(x_pert)
  
         if step % renorm_interval == 0:
             # measure perturbation growth
@@ -695,15 +693,28 @@ def compute_lle(
     lle = log_growth_sum / total_time
  
     return lle, np.array(lle_running)
- 
+
+
+def _lle_forwarders(name):
+    """Reference and perturbed forward callables for Benettin LLE."""
+    ref = surrogates[name]
+    if isinstance(ref.model, (LSTMNN, RNN)):
+        pert = SurrogateModel(model_paths[name])
+        return ref, pert
+    return ref, None
+
+
 lle_ic = true_traj[2000, :]
 lle_dense = compute_lle(surrogates['DenseNN'], lle_ic)
 lle_resdense = compute_lle(surrogates['ResDenseNN'], lle_ic)
-lle_lstm = compute_lle(surrogates['LSTMNN'], lle_ic)
-lle_rnn = compute_lle(surrogates['RNN_relu'], lle_ic)
-lle_rnn_tanh = compute_lle(surrogates['RNN_tanh'], lle_ic)
+_ref, _pert = _lle_forwarders('LSTMNN')
+lle_lstm = compute_lle(_ref, lle_ic, forward_pert=_pert)
+_ref, _pert = _lle_forwarders('RNN_relu')
+lle_rnn = compute_lle(_ref, lle_ic, forward_pert=_pert)
+_ref, _pert = _lle_forwarders('RNN_tanh')
+lle_rnn_tanh = compute_lle(_ref, lle_ic, forward_pert=_pert)
 
-# compute_lle returns mean log stretch per step; divide by dt for λ in 1/time
+# LLE is in units of 1/time (elapsed_time includes dt)
 print(f"LLE Dense:    {lle_dense[0]}  (theory ~ {THEORETICAL_LLE:.4f})")
 print(f"LLE ResDense: {lle_resdense[0]}")
 print(f"LLE LSTM:     {lle_lstm[0]}")

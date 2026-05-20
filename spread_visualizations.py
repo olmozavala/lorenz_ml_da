@@ -23,7 +23,7 @@ def init_models(n_steps):
             'DenseNN': join(model_dir, 'DenseNN_L63_trial1_1775267887_best_model.pth'),
             'ResDenseNN': join(model_dir, 'ResDenseNN_L63_trial1_1775267929_best_model.pth'),
             'LSTMNN': join(model_dir, 'LSTMNN_L63_trial1_1779133789_best_model.pth'),
-            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779133920_best_model.pth'),
+            'RNN_tanh': join(model_dir, 'RNN_L63_trial1_1779205626_best_model.pth'),
             'RNN_relu': join(model_dir, 'RNN_L63_trial1_1779117546_best_model.pth'),
         }
     else:
