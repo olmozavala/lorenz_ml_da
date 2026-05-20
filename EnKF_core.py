@@ -192,7 +192,7 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
         spread[k] = np.mean(np.std(Xf_k, axis=1))
 
         # Forecast RMSE
-        errorf[k] = np.linalg.norm(xf_k - xt_k)
+        errorf[k] = np.linalg.norm(xf_k - xt_k) / np.sqrt(Nx)
 
         # Forecast Energy Score (uniform weights, full state)
         es_f, acc_f, spr_f = energy_score(Xf_k, xt_k)
@@ -255,7 +255,7 @@ def run_enkf(forecast_fn, xt_0, Xf_pool, config: EnKFConfig):
             Xa_k = np.outer(xa_k, ones) + cfg.infl_factor * DXa_k
 
         # Analysis RMSE
-        errora[k] = np.linalg.norm(xa_k - xt_k)
+        errora[k] = np.linalg.norm(xa_k - xt_k) / np.sqrt(Nx)
         xa_traj[k] = xa_k
         Xa_all[k] = Xa_k.copy()
 

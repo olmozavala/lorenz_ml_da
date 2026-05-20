@@ -1,8 +1,9 @@
 # %%
+import argparse
 import matplotlib
 matplotlib.use('Agg')   # non-interactive backend — no display needed
 from plotting_helpers import *
-import pandas as pd
+from enkf_results_store import EnKFResultsStore, summarize_cycles
 
 import torch
 import numpy as np
@@ -22,8 +23,7 @@ os.makedirs("figures", exist_ok=True)
 _fig_count = [0]
 
 # Global configuration parameters
-_T = 300
-_M = 50
+_T = 350
 _Ne = 100
 _CORE_SEED = 10
 _NE_MAX = 150
@@ -194,12 +194,23 @@ def spinup_models(models,
     return Xf_pools, xt
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Run EnKF experiments')
+    parser.add_argument('--seed', type=int, default=132, help='Master seed')
+    parser.add_argument('--ic', type=int, default=100, help='Number of initial conditions')
+    parser.add_argument('--m', type=int, default=50, help='Number of forecast steps between assimilation cycles')
+    args = parser.parse_args()
+
+    _MASTER_SEED = args.seed
+    _IC_N = args.ic
+    _M = args.m
     surrogates, surrogates_palette = init_models()
-    _MASTER_SEED = 132
-    _IC_N = 5
     np.random.default_rng(_MASTER_SEED)
-    initial_conditions = np.random.randn(_IC_N, 3)
+    initial_conditions = np.random.randn(_IC_N, 3) + 1
     
+    model_names = ['Lorenz63', *surrogates.keys()]
+    results_store = EnKFResultsStore(_IC_N, _T, model_names)
+    results_h5_path = f'results/ms_denkf_L63_seed_{_MASTER_SEED}_ics_{_IC_N}.h5'
+
     for iic, ic in enumerate(initial_conditions):
         Xf_pools, xt = spinup_models(surrogates, ic)
         print(f"  Experiment {iic + 1} of {_IC_N}: Initial condition: {ic}")
@@ -213,5 +224,24 @@ if __name__ == '__main__':
         )
         results = run_all_models(cfg, surrogates, Xf_pools, xt, surrogates_palette)
         # plot_rmse_comparison(results, surrogates_palette, cfg, f" — Results for initial condition: {ic}")
+        plot_es_comparison(results, surrogates_palette, cfg, f" — Results for initial condition: {ic}")
+
+        results_store.record(iic, ic, _MASTER_SEED + iic + 1, results)
+
+    results_store.to_hdf5(
+        results_h5_path,
+        attrs={
+            'master_seed': _MASTER_SEED,
+            'T': _T,
+            'M': _M,
+            'Ne': _Ne,
+            'dt': 0.01,
+            'p': 1.0,
+            'sig_obs': 1.0,
+            'enkf_type': 'deterministic',
+        },
+    )
+    print(f"  [saved: {results_h5_path}]")
+    # print(summarize_cycles(results_store).to_string(index=False))
 
 # %%

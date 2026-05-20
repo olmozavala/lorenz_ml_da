@@ -40,7 +40,38 @@ def plot_rmse_comparison(results, palette, cfg, title_suffix=""):
     infl_str = f"Infl λ={cfg.infl_factor}" if cfg.use_inflation else "No Infl"
     fig.suptitle(f'EnKF Comparison  |  {loc_str}  |  {infl_str}  |  Ne={cfg.Ne}  |  M={cfg.M}  |  p={cfg.p}  |  σ_obs={cfg.sig_obs}{title_suffix}', fontsize=11)
     plt.tight_layout()
-    _savefig("rmse_comparison")
+    _savefig(f"rmse_comparison")
+
+def plot_es_comparison(results, palette, cfg, title_suffix=""):
+    """Forecast & Analysis Energy Score and RMSE side by side for all models."""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11), sharex=True, sharey=True)
+    axes = axes.flatten()
+    cycles = np.arange(cfg.T)
+    for name, res in results.items():
+        color = palette.get(name, '#888888')
+        ls = '--' if name == 'Lorenz63' else '-'
+        lw = 2.0 if name == 'Lorenz63' else 1.5
+        axes[0].plot(cycles, res['errorf_es'], color=color, label=name, lw=lw, ls=ls)
+        axes[1].plot(cycles, res['errora_es'], color=color, label=name, lw=lw, ls=ls)
+        axes[2].plot(cycles, res['errorf'], color=color, label=name, lw=lw, ls=ls)
+        axes[3].plot(cycles, res['errora'], color=color, label=name, lw=lw, ls=ls)
+    axes[0].set_title('Forecast Energy Score')
+    axes[0].set_xlabel('DA Cycle'); axes[0].set_ylabel('Energy Score')
+    axes[0].legend(); axes[0].grid(True, alpha=0.3)
+    axes[1].set_title('Analysis Energy Score')
+    axes[1].set_xlabel('DA Cycle')
+    axes[1].grid(True, alpha=0.3)
+    axes[2].set_title('Forecast RMSE')
+    axes[2].set_xlabel('DA Cycle'); axes[2].set_ylabel('RMSE')
+    axes[2].grid(True, alpha=0.3)
+    axes[3].set_title('Analysis RMSE')
+    axes[3].set_xlabel('DA Cycle')
+    axes[3].grid(True, alpha=0.3)
+    loc_str = f"Loc r={cfg.loc_radius}" if cfg.use_localization else "No Loc"
+    infl_str = f"Infl λ={cfg.infl_factor}" if cfg.use_inflation else "No Infl"
+    fig.suptitle(f'EnKF Comparison  |  {loc_str}  |  {infl_str}  |  Ne={cfg.Ne}  |  M={cfg.M}  |  p={cfg.p}  |  σ_obs={cfg.sig_obs}{title_suffix}', fontsize=11)
+    plt.tight_layout()
+    _savefig("es_comparison")
 
 def plot_spread_comparison(results, palette, cfg, title_suffix=""):
     """Ensemble spread time series."""

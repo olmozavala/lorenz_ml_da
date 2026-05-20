@@ -9,7 +9,9 @@ torch==2.10.0
 tensorboard                     # required by torch.utils.tensorboard.SummaryWriter
 
 # ── Data pipeline ─────────────────────────────────────────────────────────────
+h5py                            # EnKF benchmark HDF5 results (enkf_results_store)
 scikit-learn==1.8.0             # StandardScaler in LorenzDataset
+pandas                          # summarize_cycles in enkf_results_store
 tqdm==4.67.3                    # progress bars in LorenzDataset
 PyYAML==6.0.3                   # config serialisation in training scripts
 
